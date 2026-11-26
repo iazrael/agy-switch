@@ -62,6 +62,9 @@ function fixture(pricingHome) {
     json(join(data, 'gui_config.json'), { language: 'en', theme: 'light', auto_refresh: false, refresh_interval: 15, auto_sync: false, sync_interval: 5, quota_protection: { enabled: false, threshold_percentage: 10, monitored_models: [] }, pinned_quota_models: { models: [] } });
     json(join(data, 'auto_switch.json'), { enabled: false, mode: 'wait', reserve_percentage: 10, candidate_min_percentage: 30, monitored_model: '', candidate_account_ids: [], target: 'app' });
     json(join(pricingHome, '.antigravity_tools/api_pricing.json'), { parser_revision: parserRevision, prices: [{ model: 'gemini-test', input: 0, output: 0, cached: 0 }], fetched_at: now, stale: false, source: 'Synthetic local acceptance data, not real pricing', warning: null });
+}
+function snapshotOriginals() {
+    originals.clear();
     for (const path of ['accounts.json', 'accounts/fixture-1.json', 'accounts/fixture-2.json', 'auto_switch.json']) originals.set(path, readFileSync(join(data, path), 'utf8'));
 }
 function isolatedEnv(info) {
@@ -152,6 +155,32 @@ function appProcesses(binary) {
     }
     return readdirSync('/proc').filter(p => /^\d+$/.test(p)).flatMap(pid => { try { return readlinkSync(`/proc/${pid}/exe`) === binary ? [{ pid: Number(pid), executable: binary }] : []; } catch { return []; } });
 }
+// Credential hardening rewrites legacy account files on first load. Let the real
+// app do that one-time migration before the read-only acceptance run, so the
+// unchanged-file checks below measure only the behaviour under test.
+async function migrateFixtures(binary, env) {
+    const migrated = () => ['fixture-1.json', 'fixture-2.json'].every(name => {
+        const document = JSON.parse(readFileSync(join(data, 'accounts', name), 'utf8'));
+        return typeof document.token === 'string' && document.token.startsWith('v1:');
+    });
+    const child = spawn(binary, [], { env, cwd: root, detached: !windows, stdio: 'ignore' });
+    assert.ok(child.pid, 'Warm-up app must start');
+    let spawnError;
+    child.once('error', error => { spawnError = error; });
+    try {
+        await until(() => {
+            if (spawnError) throw spawnError;
+            if (child.exitCode !== null) throw new Error(`Warm-up app exited before credential migration (code ${child.exitCode})`);
+            return migrated();
+        }, 'app credential migration', 60000);
+    } finally {
+        if (windows) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', timeout: 10000 });
+        else try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+        await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(5000)]);
+        if (child.exitCode === null && !windows) try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+        await until(() => appProcesses(binary).length === 0, 'warm-up app exit', 10000);
+    }
+}
 try {
     const info = windows && !selfTest ? JSON.parse(readFileSync(process.env.GUI_WINDOWS_INFO, 'utf8').replace(/^\uFEFF/, '')) : {};
     if (windows && !selfTest) {
@@ -207,6 +236,9 @@ try {
     } else {
         mkdirSync(output, { recursive: true });
         assert.equal(appProcesses(binary).length, 0, 'Refusing a previously running app');
+        await migrateFixtures(binary, env);
+        snapshotOriginals();
+        report.checks.push('Legacy synthetic credentials migrated by the real app before the read-only GUI run');
         driver = spawn(process.env.TAURI_DRIVER || (windows ? 'tauri-driver.exe' : 'tauri-driver'), ['--port', '4444', '--native-port', '4445', '--native-host', '127.0.0.1', '--native-driver', process.env.NATIVE_DRIVER || '/usr/bin/WebKitWebDriver'], { env, cwd: root, detached: !windows, stdio: ['ignore', 'pipe', 'pipe'] });
         driverExit = new Promise(resolve => { driver.once('exit', resolve); driver.once('error', resolve); });
         driver.stdout.on('data', d => { driverLog = (driverLog + d).slice(-30000); }); driver.stderr.on('data', d => { driverLog = (driverLog + d).slice(-30000); });

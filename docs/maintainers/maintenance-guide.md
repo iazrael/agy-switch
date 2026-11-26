@@ -71,7 +71,10 @@ with the affected native and mocked-UI tests.
 For account storage tests, place `ABV_DATA_DIR` inside the owned temporary test
 directory so a sibling encryption key is cleaned up with the fixtures. Verify
 legacy migration, CLI metadata reads and credential round trips with synthetic
-accounts. Verify changes to shared Keychain ACLs in an isolated test keychain.
+accounts. Native GUI acceptance lets the real app perform that one-time migration
+on synthetic fixtures before snapshotting expected files; later steps still assert
+that window interaction writes no account data. Verify changes to shared Keychain
+ACLs in an isolated test keychain.
 Public release trust checks still require the configured platform signing
 identities and the final packaged artifacts.
 
