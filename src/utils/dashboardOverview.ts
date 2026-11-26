@@ -12,8 +12,9 @@ export function dashboardOverview(snapshot: DashboardSnapshot, preferences: Menu
     for (const view of views) {
         if (view.account.read_status !== 'loaded') continue;
         const values = (['5h', 'weekly'] as const).flatMap(window => families.map(family => view.windows[window][family].remaining));
-        if (!view.switchable || values.some(value => value !== null && value <= threshold)) unavailable++;
-        else if (values.every(value => value !== null && value > threshold)) available++;
+        const known = values.filter((value): value is number => value !== null);
+        if (!view.switchable || known.some(value => value <= threshold)) unavailable++;
+        else if (known.length > 0) available++;
     }
     const total = snapshot.indexed_total;
     const accounts = { total, available, unavailable, unknown: Math.max(0, total - available - unavailable) };

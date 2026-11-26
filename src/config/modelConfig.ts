@@ -98,6 +98,46 @@ export const MODEL_CONFIG: Record<string, ModelConfig> = {
         group: 'Gemini 4',
         tags: ['argon', 'low'],
     },
+    'gemini-4-neon': {
+        label: 'Gemini 4 Neon',
+        shortLabel: 'G4 Neon',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        group: 'Gemini 4',
+        tags: ['neon'],
+    },
+    'gemini-4-neon-xhigh': {
+        label: 'Gemini 4 Neon (Extra)',
+        shortLabel: 'G4 Neon',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        group: 'Gemini 4',
+        tags: ['neon', 'xhigh'],
+    },
+    'gemini-4-neon-high': {
+        label: 'Gemini 4 Neon (High)',
+        shortLabel: 'G4 Neon',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        group: 'Gemini 4',
+        tags: ['neon', 'high'],
+    },
+    'gemini-4-neon-medium': {
+        label: 'Gemini 4 Neon (Medium)',
+        shortLabel: 'G4 Neon',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        group: 'Gemini 4',
+        tags: ['neon', 'medium'],
+    },
+    'gemini-4-neon-low': {
+        label: 'Gemini 4 Neon (Low)',
+        shortLabel: 'G4 Neon',
+        protectedKey: 'gemini-pro',
+        Icon: Gemini.Color,
+        group: 'Gemini 4',
+        tags: ['neon', 'low'],
+    },
     'gemini-4-hydrogen': {
         label: 'Gemini 4 Hydrogen',
         shortLabel: 'G4 Hydrogen',
@@ -470,13 +510,15 @@ export function getModelSortWeight(modelId: string): number {
         weight += 30;
     }
 
-    // 4. Gemini 4 家族内排序：Orchestrator、Carbon、Argon、Hydrogen
+    // 4. Gemini 4 家族内排序：Orchestrator、Carbon、Argon、Neon、Hydrogen
     if (id.includes('orchestrator')) {
         weight += 50;
     } else if (id.includes('carbon')) {
         weight += 100;
     } else if (id.includes('argon')) {
         weight += 150;
+    } else if (id.includes('neon')) {
+        weight += 175;
     } else if (id.includes('hydrogen')) {
         weight += 200;
     }

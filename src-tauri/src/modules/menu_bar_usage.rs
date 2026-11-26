@@ -66,7 +66,7 @@ pub(crate) fn pricing_keys(model: &str) -> (String, Option<String>) {
     static GEMINI: OnceLock<regex::Regex> = OnceLock::new();
     let exact = TOKENS.get_or_init(|| regex::Regex::new(r"[a-z]+|[0-9]+").unwrap())
         .find_iter(model).map(|token| token.as_str()).collect::<Vec<_>>().join("-");
-    let pattern = GEMINI.get_or_init(|| regex::Regex::new(r"^gemini-([0-9]+(?:-[0-9]+)*)-(flash(?:-lite)?|pro|argon|carbon|hydrogen)(?:-(.*))?$").unwrap());
+    let pattern = GEMINI.get_or_init(|| regex::Regex::new(r"^gemini-([0-9]+(?:-[0-9]+)*)-(flash(?:-lite)?|pro|argon|carbon|neon|hydrogen)(?:-(.*))?$").unwrap());
     if let Some(gemini) = pattern.captures(&exact) {
         let suffix: Vec<_> = gemini.get(3).map(|value| value.as_str().split('-').collect()).unwrap_or_default();
         let distinct_variant = suffix.iter().any(|token| ["lite", "image", "vision", "audio", "tts", "live", "embedding", "embeddings", "robotics", "native"].contains(token));

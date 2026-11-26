@@ -29,6 +29,7 @@ const BASELINE_CANONICAL_MODELS: ModelOption[] = [
     { id: 'gemini-pro-orchestrator-argon', label: 'Orchestrator (Argon)', group: 'gemini', iconType: 'gemini', tag: 'ORCH' },
     { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon', group: 'gemini', iconType: 'gemini', tag: 'PRO' },
     { id: 'gemini-4-argon', label: 'Gemini 4 Argon', group: 'gemini', iconType: 'gemini', tag: 'PRO' },
+    { id: 'gemini-4-neon', label: 'Gemini 4 Neon', group: 'gemini', iconType: 'gemini', tag: 'PRO' },
     { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen', group: 'gemini', iconType: 'gemini', tag: 'FLASH' },
     { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', group: 'gemini', iconType: 'gemini', tag: 'PRO' },
     { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', group: 'gemini', iconType: 'gemini', tag: 'FLASH' },

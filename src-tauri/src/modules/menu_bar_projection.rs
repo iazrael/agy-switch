@@ -165,9 +165,12 @@ pub fn open_menu_windows(snapshot: Option<&DashboardSnapshot>, ids: &[&str], pre
 
 pub fn aggregate(windows: &[[[Option<f64>; 2]; 2]], scope: MenuBarQuotaScope, period: usize, reserve: u8) -> (Option<f64>, usize, usize) {
     let families: &[usize] = match scope { MenuBarQuotaScope::All => &[0, 1], MenuBarQuotaScope::Gemini => &[0], MenuBarQuotaScope::Other => &[1] };
-    let covered: Vec<_> = windows.iter().filter(|row| families.iter().all(|&family| row[period][family].is_some())).collect();
-    let usable = covered.iter().filter(|row| families.iter().all(|&family| row[period][family].unwrap() > f64::from(reserve))).count();
-    let values: Vec<_> = covered.iter().flat_map(|row| families.iter().map(|&family| row[period][family].unwrap())).collect();
+    let covered: Vec<Vec<f64>> = windows.iter()
+        .map(|row| families.iter().filter_map(|&family| row[period][family]).collect::<Vec<_>>())
+        .filter(|vals| !vals.is_empty())
+        .collect();
+    let usable = covered.iter().filter(|vals| vals.iter().all(|&value| value > f64::from(reserve))).count();
+    let values: Vec<f64> = covered.iter().flat_map(|vals| vals.iter().copied()).collect();
     ((!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64), usable, covered.len())
 }
 
@@ -389,9 +392,14 @@ mod tests {
     }
     #[test] fn aggregation_keeps_known_zero_and_counts_availability_separately() {
         let windows = [[[Some(100.0), Some(50.0)], [Some(0.0), Some(50.0)]], [[None, Some(50.0)], [Some(100.0), Some(100.0)]]];
-        assert_eq!(aggregate(&windows, MenuBarQuotaScope::All, 0, 10), (Some(75.0), 1, 1));
+        let (all_remaining, all_usable, all_covered) = aggregate(&windows, MenuBarQuotaScope::All, 0, 10);
+        assert!((all_remaining.unwrap() - (200.0 / 3.0)).abs() < 1e-9);
+        assert_eq!((all_usable, all_covered), (2, 2));
         assert_eq!(aggregate(&windows, MenuBarQuotaScope::Gemini, 1, 10), (Some(50.0), 1, 2));
         assert_eq!(aggregate(&windows, MenuBarQuotaScope::Other, 0, 10), (Some(50.0), 2, 2));
+        let gemini_only = [[[Some(31.0), None], [Some(60.0), None]]];
+        assert_eq!(aggregate(&gemini_only, MenuBarQuotaScope::All, 0, 10), (Some(31.0), 1, 1));
+        assert_eq!(aggregate(&gemini_only, MenuBarQuotaScope::All, 1, 10), (Some(60.0), 1, 1));
         assert_eq!(percent(Some(0.02)), "0%"); assert_eq!(percent(Some(99.6)), "100%"); assert_eq!(percent(None), "—");
     }
     #[test] fn open_menu_recovers_from_stale_cache_without_reopening_or_reordering() {

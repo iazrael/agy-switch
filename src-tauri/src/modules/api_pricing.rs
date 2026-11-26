@@ -10,7 +10,7 @@ const AGENT_PLATFORM_PRICING_URL: &str =
     "https://platform.claude.com/docs/en/about-claude/pricing.md";
 const EXCHANGE_RATE_API_URL: &str = "https://open.er-api.com/v6/latest/USD";
 const CACHE_TTL_SECONDS: i64 = 24 * 60 * 60;
-const PARSER_REVISION: u32 = 5;
+const PARSER_REVISION: u32 = 6;
 const DEFAULT_USD_TO_CNY: f64 = 7.25;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +273,7 @@ pub fn builtin_fallback_prices() -> Vec<ApiPricing> {
     vec![
         ApiPricing { model: "gemini-4-carbon".into(), input: carbon_input, output: carbon_output, cached: carbon_cached },
         ApiPricing { model: "gemini-4-argon".into(), input: carbon_input, output: carbon_output, cached: carbon_cached },
+        ApiPricing { model: "gemini-4-neon".into(), input: 3.00, output: 15.00, cached: 0.15 },
         ApiPricing { model: "gemini-4-hydrogen".into(), input: 1.50, output: 7.50, cached: 0.075 },
         ApiPricing { model: "gemini-3.8-flash".into(), input: flash_input, output: flash_output, cached: flash_cached },
         ApiPricing { model: "gemini-3.6-flash".into(), input: flash_input, output: flash_output, cached: flash_cached },
