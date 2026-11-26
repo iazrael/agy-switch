@@ -1,3 +1,4 @@
+mod account_secrets;
 pub mod account;
 pub mod account_dashboard;
 pub mod account_service;
@@ -51,3 +52,6 @@ pub mod app_experiments;
 #[cfg(any(target_os = "windows", test))]
 pub(crate) mod app_metadata_windows;
 pub mod updater;
+
+#[cfg(target_os = "macos")]
+mod macos_keychain;

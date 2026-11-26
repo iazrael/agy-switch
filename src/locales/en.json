@@ -232,8 +232,8 @@
         "copied": "Copied",
         "link_label": "Authorization URL",
         "link_click_to_copy": "Click to copy",
-        "manual_hint": "Browser didn't redirect? Paste the full callback URL or raw Code here:",
-        "manual_placeholder": "Paste callback URL or code...",
+        "manual_hint": "Browser could not reach the app? Paste the complete callback URL from the address bar.",
+        "manual_placeholder": "Paste the complete callback URL",
         "error_no_flow": "Please click 'Start OAuth' first",
         "web_hint": "Google login page will open in a new window",
         "error_no_url": "Could not obtain OAuth URL",
@@ -303,6 +303,7 @@
     "select_account": "Select account {{email}}",
     "select_page": "Select accounts on this page",
     "export_account": "Export account",
+    "export_dialog_title": "Export account credentials",
     "export_selected": "Export {{count}} selected accounts",
     "export_success": "Exported {{count}} accounts",
     "export_failed": "Export failed: {{error}}"

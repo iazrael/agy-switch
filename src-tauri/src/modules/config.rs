@@ -61,6 +61,10 @@ fn save_config_at(path: &Path, config: &AppConfig) -> Result<(), String> {
     next.desktop = current.desktop;
     next.menu_bar = current.menu_bar;
     next.dashboard = current.dashboard;
+    next.antigravity_executable = current.antigravity_executable;
+    next.antigravity_ide_executable = current.antigravity_ide_executable;
+    next.antigravity_args = current.antigravity_args;
+    next.antigravity_ide_args = current.antigravity_ide_args;
     write_config_unlocked(path, &next)
 }
 
@@ -80,6 +84,19 @@ pub fn load_app_config() -> Result<AppConfig, String> {
 /// managed desktop, menu and dashboard preferences from disk configuration.
 pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
     save_config_at(&get_data_dir()?.join(CONFIG_FILE), config)
+}
+
+/// Only a native chooser or an explicit reset can change the GUI launch target.
+pub(crate) fn set_client_executable(ide: bool, executable: Option<String>) -> Result<(), String> {
+    let _guard = lock_config()?;
+    let path = get_data_dir()?.join(CONFIG_FILE);
+    let mut config = read_config_unlocked(&path)?.unwrap_or_default();
+    if ide {
+        config.antigravity_ide_executable = executable;
+    } else {
+        config.antigravity_executable = executable;
+    }
+    write_config_unlocked(&path, &config)
 }
 
 /// Persist only the desktop preferences after their OS-backed transaction.
@@ -128,6 +145,26 @@ fn patch_menu_bar_preferences_at(path: &Path, patch: crate::models::config::Menu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_settings_saves_preserve_native_launch_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("gui_config.json");
+        let current = AppConfig {
+            antigravity_executable: Some("fixture-client".into()),
+            antigravity_ide_executable: Some("fixture-ide".into()),
+            antigravity_args: Some(vec!["fixture-argument".into()]),
+            ..AppConfig::default()
+        };
+        write_config_unlocked(&path, &current).unwrap();
+        let draft = AppConfig { theme: "dark".into(), ..AppConfig::default() };
+        save_config_at(&path, &draft).unwrap();
+        let saved = load_config_at(&path).unwrap();
+        assert_eq!(saved.theme, "dark");
+        assert_eq!(saved.antigravity_executable, current.antigravity_executable);
+        assert_eq!(saved.antigravity_ide_executable, current.antigravity_ide_executable);
+        assert_eq!(saved.antigravity_args, current.antigravity_args);
+    }
+
     #[test]
     fn hidden_card_positions_survive_toggle_reload_and_stale_general_save() {
         let root = tempfile::tempdir().unwrap();

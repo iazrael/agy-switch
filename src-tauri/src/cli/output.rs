@@ -120,12 +120,7 @@ impl Snapshot {
         let mut accounts = vec![];
         for summary in index.accounts {
             // IDs are normally UUIDs. Do not allow a corrupted index to read outside accounts/.
-            if summary.id.is_empty()
-                || !summary
-                    .id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-            {
+            if !crate::modules::account::is_account_id(&summary.id) {
                 return Err(CliError::data(
                     "Account index contains an invalid account ID.",
                 ));

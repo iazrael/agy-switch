@@ -5,7 +5,6 @@ import { useConfigStore } from '../stores/useConfigStore';
 import { AppConfig } from '../types/config';
 import { request as invoke } from '../utils/request';
 import { showToast } from '../components/common/ToastContainer';
-import { open } from '@tauri-apps/plugin-dialog';
 import UpdateSettings from '../components/settings/UpdateSettings';
 import DesktopSettings from '../components/settings/DesktopSettings';
 import DashboardSettings from '../components/settings/DashboardSettings';
@@ -63,10 +62,13 @@ function Settings() {
         }
     };
 
-    const chooseExecutable = async (field: 'antigravity_executable' | 'antigravity_ide_executable') => {
+    const chooseExecutable = async (field: 'antigravity_executable' | 'antigravity_ide_executable', reset = false) => {
         try {
-            const selected = await open({ multiple: false, directory: false, title: t('local_settings.choose_executable') });
-            if (typeof selected === 'string') await updateConfig({ [field]: selected });
+            const changed = await invoke<boolean>('set_client_executable', { ide: field === 'antigravity_ide_executable', reset });
+            if (changed) {
+                await loadConfig();
+                showToast(t('local_settings.saved'), 'success');
+            }
         } catch (error) {
             showToast(t('local_settings.save_failed', { error: String(error) }), 'error');
         }
@@ -272,7 +274,7 @@ function Settings() {
                                             {isCustom && (
                                                 <button
                                                     type="button"
-                                                    onClick={() => updateConfig({ [field]: undefined })}
+                                                    onClick={() => chooseExecutable(field, true)}
                                                     className="rounded-lg px-2.5 py-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
                                                 >
                                                     {t('local_settings.reset_detection', '重置为自动')}

@@ -106,36 +106,43 @@ fn get_version_macos(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
 /// Windows: 从可执行文件元数据读取版本
 #[cfg(target_os = "windows")]
 fn get_version_windows(exe_path: &PathBuf) -> Result<AntigravityVersion, String> {
-    use crate::utils::command::CommandExtWrapper;
-    use std::process::Command;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+    };
 
-    // Windows: 使用 PowerShell 读取文件版本信息
-    let mut cmd = Command::new("powershell");
-    let output = cmd
-        .creation_flags_windows()
-        .args([
-            "-Command",
-            &format!(
-                "(Get-Item '{}').VersionInfo.FileVersion",
-                exe_path.display()
-            ),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute PowerShell: {}", e))?;
-
-    if !output.status.success() {
-        return Err("Failed to read version from executable".to_string());
+    let path: Vec<u16> = exe_path.as_os_str().encode_wide().chain([0]).collect();
+    let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), ptr::null_mut()) };
+    if size == 0 || size > 16 * 1024 * 1024 {
+        return Err("Version resource is missing or invalid".into());
     }
 
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    if version.is_empty() {
-        return Err("Version information not found in executable".to_string());
+    let mut buffer = vec![0u32; (size as usize).div_ceil(4)];
+    let mut value = ptr::null_mut();
+    let mut length = 0;
+    let root = [u16::from(b'\\'), 0];
+    let version = unsafe {
+        if GetFileVersionInfoW(path.as_ptr(), 0, size, buffer.as_mut_ptr().cast()) == 0
+            || VerQueryValueW(buffer.as_ptr().cast(), root.as_ptr(), &mut value, &mut length) == 0
+            || value.is_null()
+            || (length as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+        {
+            return Err("Cannot read the executable's version resource".into());
+        }
+        ptr::read_unaligned(value.cast::<VS_FIXEDFILEINFO>())
+    };
+    if version.dwSignature != 0xFEEF_04BD {
+        return Err("Invalid executable version resource".into());
     }
 
+    let major = version.dwFileVersionMS >> 16;
+    let minor = version.dwFileVersionMS & 0xffff;
+    let patch = version.dwFileVersionLS >> 16;
+    let revision = version.dwFileVersionLS & 0xffff;
     Ok(AntigravityVersion {
-        short_version: version.clone(),
-        bundle_version: version,
+        short_version: format!("{major}.{minor}.{patch}"),
+        bundle_version: format!("{major}.{minor}.{patch}.{revision}"),
     })
 }
 

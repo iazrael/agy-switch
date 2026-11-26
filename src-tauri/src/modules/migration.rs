@@ -273,6 +273,12 @@ fn extract_enterprise_project_id_from_conn(
     }
 }
 
+#[cfg(test)]
+#[test]
+fn bundled_sqlite_contains_the_account_import_security_fix() {
+    assert!(rusqlite::version_number() >= 3_054_000);
+}
+
 pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<ImportedOAuthState, String> {
     use base64::{engine::general_purpose, Engine as _};
 
@@ -283,6 +289,8 @@ pub(crate) fn extract_oauth_state_from_file(db_path: &PathBuf) -> Result<Importe
     // Connect to database
     let conn = rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("Failed to open database: {}", e))?;
+    conn.pragma_update(None, "trusted_schema", false)
+        .map_err(|_| "Cannot disable trusted schema for account database.")?;
 
     // 1. 尝试新版格式 (>= 1.16.5)
     // 键: antigravityUnifiedStateSync.oauthToken

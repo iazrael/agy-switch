@@ -107,8 +107,8 @@ fn build_registry() -> OAuthClientRegistry {
             let parts: Vec<&str> = trimmed.split('|').map(|v| v.trim()).collect();
             if parts.len() < 3 {
                 crate::modules::logger::log_warn(&format!(
-                    "Ignored invalid OAuth client entry in {}: {}",
-                    OAUTH_CLIENTS_ENV, trimmed
+                    "Ignored invalid OAuth client entry in {}",
+                    OAUTH_CLIENTS_ENV
                 ));
                 continue;
             }
@@ -116,8 +116,8 @@ fn build_registry() -> OAuthClientRegistry {
             let key = normalize_client_key(parts[0]);
             if key.is_empty() || parts[1].is_empty() || parts[2].is_empty() {
                 crate::modules::logger::log_warn(&format!(
-                    "Ignored incomplete OAuth client entry in {}: {}",
-                    OAUTH_CLIENTS_ENV, trimmed
+                    "Ignored incomplete OAuth client entry in {}",
+                    OAUTH_CLIENTS_ENV
                 ));
                 continue;
             }
@@ -246,6 +246,22 @@ fn get_candidate_clients(preferred_client_key: Option<&str>) -> Vec<OAuthClientC
     candidates
 }
 
+fn oauth_error_code(body: &str) -> &'static str {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    match parsed.as_ref().and_then(|body| body.get("error")).and_then(|code| code.as_str()) {
+        Some("invalid_grant") => "invalid_grant",
+        Some("invalid_client") => "invalid_client",
+        Some("invalid_request") => "invalid_request",
+        Some("unauthorized_client") => "unauthorized_client",
+        Some("unsupported_grant_type") => "unsupported_grant_type",
+        Some("invalid_scope") => "invalid_scope",
+        Some("access_denied") => "access_denied",
+        Some("server_error") => "server_error",
+        Some("temporarily_unavailable") => "temporarily_unavailable",
+        _ => "unexpected_oauth_error",
+    }
+}
+
 fn is_client_mismatch_error(status: reqwest::StatusCode, error_text: &str) -> bool {
     let text = error_text.to_ascii_lowercase();
     status == reqwest::StatusCode::BAD_REQUEST
@@ -329,6 +345,7 @@ pub fn set_active_oauth_client_key(client_key: &str) -> Result<(), String> {
 pub fn get_auth_url_with_client(
     redirect_uri: &str,
     state: &str,
+    code_challenge: &str,
     client_key: Option<&str>,
 ) -> Result<(String, String), String> {
     let client = select_auth_client(client_key)?;
@@ -352,6 +369,8 @@ pub fn get_auth_url_with_client(
         ("prompt", "consent"),
         ("include_granted_scopes", "true"),
         ("state", state),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
     ];
 
     let url = url::Url::parse_with_params(AUTH_URL, &params)
@@ -363,6 +382,7 @@ async fn exchange_code_once(
     code: &str,
     redirect_uri: &str,
     client_cfg: &OAuthClientConfig,
+    code_verifier: &str,
 ) -> Result<TokenResponse, (Option<reqwest::StatusCode>, String)> {
     let client = crate::utils::http::get_long_standard_client().map_err(|error| (None, error))?;
     let params = [
@@ -371,6 +391,7 @@ async fn exchange_code_once(
         ("code", code),
         ("redirect_uri", redirect_uri),
         ("grant_type", "authorization_code"),
+        ("code_verifier", code_verifier),
     ];
 
     tracing::debug!(
@@ -432,7 +453,7 @@ async fn exchange_code_once(
         let error_text = response.text().await.unwrap_or_default();
         Err((
             Some(status),
-            format!("Token exchange failed: {}", error_text),
+            format!("Token exchange failed (HTTP {status}): {}", oauth_error_code(&error_text)),
         ))
     }
 }
@@ -443,6 +464,7 @@ pub async fn exchange_code_with_client(
     code: &str,
     redirect_uri: &str,
     preferred_client_key: Option<&str>,
+    code_verifier: &str,
 ) -> Result<TokenResponse, String> {
     let candidates = get_candidate_clients(preferred_client_key);
     if candidates.is_empty() {
@@ -452,7 +474,7 @@ pub async fn exchange_code_with_client(
     let mut attempt_errors: Vec<String> = Vec::new();
 
     for (idx, client_cfg) in candidates.iter().enumerate() {
-        match exchange_code_once(code, redirect_uri, client_cfg).await {
+        match exchange_code_once(code, redirect_uri, client_cfg, code_verifier).await {
             Ok(token_res) => {
                 if idx > 0 {
                     crate::modules::logger::log_info(&format!(
@@ -554,7 +576,7 @@ async fn refresh_access_token_once(
     } else {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
-        Err((Some(status), format!("Refresh failed: {}", error_text)))
+        Err((Some(status), format!("Refresh failed (HTTP {status}): {}", oauth_error_code(&error_text))))
     }
 }
 
@@ -720,9 +742,11 @@ mod tests {
     fn test_get_auth_url_contains_state() {
         let redirect_uri = "http://localhost:8080/callback";
         let state = "test-state-123456";
-        let (url, _) = get_auth_url_with_client(redirect_uri, state, None).unwrap();
+        let (url, _) = get_auth_url_with_client(redirect_uri, state, "fixture-challenge", None).unwrap();
 
         assert!(url.contains("state=test-state-123456"));
+        assert!(url.contains("code_challenge=fixture-challenge"));
+        assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback"));
         assert!(url.contains("response_type=code"));
     }

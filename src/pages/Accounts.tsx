@@ -26,8 +26,6 @@ import { showToast } from "../components/common/ToastContainer";
 import { useAccountStore } from "../stores/useAccountStore";
 import { cn } from "../utils/cn";
 import { useTranslation } from "react-i18next";
-import { save } from "@tauri-apps/plugin-dialog";
-import { format } from "date-fns";
 import { saveAccountExport, fetchAccountQuota } from "../services/accountService";
 import type { Account } from "../types/account";
 import { getAccountTier, type AccountTier } from "../utils/accountTier";
@@ -286,9 +284,8 @@ function Accounts() {
 
   const handleExport = async (ids: string[]) => {
     try {
-      const path = await save({ defaultPath: `antigravity-accounts-${format(new Date(), 'yyyy-MM-dd_HH-mm-ss')}.json`, filters: [{ name: 'JSON', extensions: ['json'] }], title: t('accounts.export_account') });
-      if (!path) return;
-      const count = await saveAccountExport(ids, path);
+      const count = await saveAccountExport(ids);
+      if (count === null) return;
       showToast(t('accounts.export_success', { count }), 'success');
     } catch (error) { showToast(t('accounts.export_failed', { error: String(error) }), 'error'); }
   };

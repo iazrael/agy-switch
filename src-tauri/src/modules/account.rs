@@ -1,27 +1,14 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::models::{Account, AccountIndex, AccountSummary, QuotaData, TokenData};
 use crate::modules;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
-
-/// Global per-account lock to prevent concurrent write collisions on the same account JSON file
-static ACCOUNT_FILE_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-fn get_account_lock(account_id: &str) -> Arc<Mutex<()>> {
-    let mut locks = ACCOUNT_FILE_LOCKS.lock().unwrap();
-    locks
-        .entry(account_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -34,31 +21,19 @@ pub(crate) mod tests {
 
     struct TestDataDir {
         path: PathBuf,
+        _root: tempfile::TempDir,
     }
 
     impl TestDataDir {
         fn new() -> Self {
-            let temp_path = std::env::temp_dir().join(format!(
-                "antigravity_test_{}_{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            ));
-            fs::create_dir_all(&temp_path).expect("Failed to create temp dir");
-
-            Self { path: temp_path }
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("data");
+            fs::create_dir(&path).unwrap();
+            Self { path, _root: root }
         }
 
         fn path(&self) -> &PathBuf {
             &self.path
-        }
-    }
-
-    impl Drop for TestDataDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
         }
     }
 
@@ -423,6 +398,16 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn account_files_accept_only_safe_legacy_id_characters() {
+        for id in ["fixture-1", "old_account", "123"] {
+            assert!(account_file(std::path::Path::new("accounts"), id).is_ok());
+        }
+        for id in ["", "account name", "nested/account", "nested\\account", "account.json"] {
+            assert!(account_file(std::path::Path::new("accounts"), id).is_err());
+        }
+    }
+
+    #[test]
     fn test_load_account_with_trailing_characters() {
         let _guard = TEST_MUTEX.lock().unwrap();
         let dir = TestDataDir::new();
@@ -443,11 +428,10 @@ pub(crate) mod tests {
 
         // Verify the file was cleaned and re-written as valid JSON
         let healed_raw = fs::read_to_string(&account_path).unwrap();
-        let regular_parse: Result<Account, _> = serde_json::from_str(&healed_raw);
-        assert!(
-            regular_parse.is_ok(),
-            "Healed file should be standard valid JSON"
-        );
+        let document: serde_json::Value = serde_json::from_str(&healed_raw).unwrap();
+        assert!(document["token"].as_str().unwrap().starts_with("v1:"));
+        assert!(!healed_raw.contains("refresh_token"));
+        assert_eq!(load_account_at_path(&account_path).unwrap().token.refresh_token, loaded.token.refresh_token);
     }
 }
 
@@ -472,8 +456,7 @@ pub fn get_data_dir() -> Result<PathBuf, String> {
         if !env_path.trim().is_empty() {
             let data_dir = PathBuf::from(env_path);
             if !data_dir.exists() {
-                fs::create_dir_all(&data_dir)
-                    .map_err(|e| format!("failed_to_create_custom_data_dir: {}", e))?;
+                crate::utils::fs::private_directory(&data_dir)?;
             }
             return Ok(data_dir);
         }
@@ -482,10 +465,7 @@ pub fn get_data_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("failed_to_get_home_dir")?;
     let data_dir = home.join(DATA_DIR);
 
-    // Ensure directory exists
-    if !data_dir.exists() {
-        fs::create_dir_all(&data_dir).map_err(|e| format!("failed_to_create_data_dir: {}", e))?;
-    }
+    crate::utils::fs::private_directory(&data_dir)?;
 
     Ok(data_dir)
 }
@@ -495,10 +475,7 @@ pub fn get_accounts_dir() -> Result<PathBuf, String> {
     let data_dir = get_data_dir()?;
     let accounts_dir = data_dir.join(ACCOUNTS_DIR);
 
-    if !accounts_dir.exists() {
-        fs::create_dir_all(&accounts_dir)
-            .map_err(|e| format!("failed_to_create_accounts_dir: {}", e))?;
-    }
+    crate::utils::fs::private_directory(&accounts_dir)?;
 
     Ok(accounts_dir)
 }
@@ -585,18 +562,8 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "json") {
                     if let Some(account_id) = path.file_stem().and_then(|s| s.to_str()) {
-                        match load_account_at_path(&path) {
-                            Ok(account) => {
-                                summaries.push(AccountSummary {
-                                    id: account.id,
-                                    email: account.email,
-                                    name: account.name,
-                                    disabled: account.disabled,
-                                    protected_models: account.protected_models,
-                                    created_at: account.created_at,
-                                    last_used: account.last_used,
-                                });
-                            }
+                        match recover_account_summary(&path, account_id) {
+                            Ok(summary) => summaries.push(summary),
                             Err(e) => {
                                 crate::modules::logger::log_warn(&format!(
                                     "Failed to load account {} during recovery: {}",
@@ -634,33 +601,76 @@ fn rebuild_index_from_accounts_in_dir(data_dir: &PathBuf) -> Result<AccountIndex
     })
 }
 
-/// Load account from a specific path with self-healing support for trailing characters/corrupted suffixes
-fn load_account_at_path(account_path: &PathBuf) -> Result<Account, String> {
-    let content = fs::read_to_string(account_path)
-        .map_err(|e| format!("failed_to_read_account_data: {}", e))?;
-
-    match serde_json::from_str::<Account>(&content) {
-        Ok(account) => Ok(account),
-        Err(e) => {
-            let err_msg = e.to_string();
-            // Self-healing attempt: handle trailing characters / extra closing brackets
-            if err_msg.contains("trailing characters")
-                || err_msg.contains("trailing comma")
-                || err_msg.contains("trailing")
-            {
-                let mut de = serde_json::Deserializer::from_str(&content);
-                if let Ok(account) = serde::Deserialize::deserialize(&mut de) {
-                    crate::modules::logger::log_warn(&format!(
-                        "Self-healing account JSON at {:?}: recovered valid account data from trailing characters, saving clean file",
-                        account_path
-                    ));
-                    let _ = save_account_at_path(account_path, &account);
-                    return Ok(account);
-                }
-            }
-            Err(format!("failed_to_parse_account_data: {}", err_msg))
+fn account_storage_lock(directory: &std::path::Path) -> Result<fs::File, String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(directory.join(".storage.lock"))
+        .map_err(|_| "Cannot open the account storage lock.")?;
+    let metadata = file.metadata().map_err(|_| "Cannot inspect the account storage lock.")?;
+    if !metadata.is_file() { return Err("Invalid account storage lock file.".into()); }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("Invalid account storage lock file.".into());
         }
     }
+    file.lock().map_err(|_| "Cannot lock account storage.")?;
+    Ok(file)
+}
+
+fn recover_account_summary(path: &std::path::Path, id: &str) -> Result<AccountSummary, String> {
+    if !is_account_id(id) { return Err("Invalid account ID.".into()); }
+    let file = crate::utils::fs::open_private_file(path)?;
+    let mut document = serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+    let summary = AccountSummary::deserialize(&mut document).map_err(|_| "Cannot read account metadata.")?;
+    if summary.id != id { return Err("Account ID does not match its filename.".into()); }
+    Ok(summary)
+}
+
+/// Serialize legacy migration with GUI and CLI writes. If key access fails, retain
+/// the original file and allow the user to read the legacy account again.
+fn load_account_at_path(path: &std::path::Path) -> Result<Account, String> {
+    use std::io::Read;
+    use zeroize::Zeroizing;
+    let id = path.file_stem().and_then(|name| name.to_str())
+        .filter(|id| is_account_id(id)).ok_or("Invalid account ID.")?;
+    let directory = path.parent().ok_or("Invalid account storage directory.")?;
+    let _storage = account_storage_lock(directory)?;
+    let mut file = crate::utils::fs::open_private_file(path)?;
+    let mut content = Zeroizing::new(String::new());
+    file.read_to_string(&mut content).map_err(|_| "Cannot read account file.")?;
+    drop(file);
+
+    let mut deserializer = serde_json::Deserializer::from_str(&content);
+    let mut document = serde_json::Value::deserialize(&mut deserializer)
+        .map_err(|_| "Cannot parse account file.")?;
+    let trailing_data = deserializer.end().is_err();
+    let token_field = document.get_mut("token").ok_or("Account credentials are missing.")?;
+    let legacy = !token_field.is_string();
+    if let Some(sealed) = token_field.as_str() {
+        let token = super::account_secrets::open(sealed, id, path)?;
+        *token_field = serde_json::to_value(token).map_err(|_| "Cannot decode account credentials.")?;
+    }
+    let account: Account = serde_json::from_value(document).map_err(|_| "Cannot parse account file.")?;
+    if account.id != id { return Err("Account ID does not match its filename.".into()); }
+
+    if (legacy || trailing_data) && write_account_unlocked(path, &account).is_err() {
+        crate::modules::logger::log_warn("Account storage migration could not be completed; the original file was retained.");
+    }
+    Ok(account)
 }
 
 /// Load account index with recovery support
@@ -743,28 +753,39 @@ pub fn save_account_index(index: &AccountIndex) -> Result<(), String> {
 }
 
 /// Load account data
+pub(crate) fn is_account_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn account_file(accounts_dir: &std::path::Path, id: &str) -> Result<PathBuf, String> {
+    if !is_account_id(id) { return Err("Invalid account ID".into()); }
+    Ok(accounts_dir.join(format!("{id}.json")))
+}
+
 pub fn load_account(account_id: &str) -> Result<Account, String> {
     let accounts_dir = get_accounts_dir()?;
-    let account_path = accounts_dir.join(format!("{}.json", account_id));
+    let account_path = account_file(&accounts_dir, account_id)?;
     load_account_at_path(&account_path)
 }
 
-/// Save account data at specific file path (thread-safe and atomic)
-fn save_account_at_path(account_path: &PathBuf, account: &Account) -> Result<(), String> {
-    let _lock = get_account_lock(&account.id);
-    let _guard = _lock.lock().unwrap();
+fn write_account_unlocked(path: &std::path::Path, account: &Account) -> Result<(), String> {
+    let sealed = super::account_secrets::seal(&account.token, &account.id, path)?;
+    let mut document = serde_json::to_value(account).map_err(|_| "Cannot encode account data.")?;
+    document["token"] = serde_json::Value::String(sealed);
+    let content = serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode account data.")?;
+    crate::utils::fs::write_atomic(path, &content).map_err(|_| "Cannot save the account file.")
+}
 
-    let content = serde_json::to_string_pretty(account)
-        .map_err(|e| format!("failed_to_serialize_account_data: {}", e))?;
-
-    crate::utils::fs::write_atomic(account_path, content.as_bytes())
-        .map_err(|e| format!("failed_to_save_account_file: {}", e))
+fn save_account_at_path(path: &std::path::Path, account: &Account) -> Result<(), String> {
+    let directory = path.parent().ok_or("Invalid account storage directory.")?;
+    let _storage = account_storage_lock(directory)?;
+    write_account_unlocked(path, account)
 }
 
 /// Save account data (thread-safe and atomic)
 pub fn save_account(account: &Account) -> Result<(), String> {
     let accounts_dir = get_accounts_dir()?;
-    let account_path = accounts_dir.join(format!("{}.json", account.id));
+    let account_path = account_file(&accounts_dir, &account.id)?;
     save_account_at_path(&account_path, account)
 }
 
@@ -921,71 +942,50 @@ fn clear_target_selection(index: &mut AccountIndex, id: &str) {
 
 /// Delete account
 pub fn delete_account(account_id: &str) -> Result<(), String> {
-    let _lock = ACCOUNT_INDEX_LOCK
-        .lock()
-        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
-    let mut index = load_account_index()?;
-
-    // Remove from index
-    let original_len = index.accounts.len();
-    index.accounts.retain(|s| s.id != account_id);
-    clear_target_selection(&mut index, account_id);
-
-    if index.accounts.len() == original_len {
-        return Err(format!("Account ID not found: {}", account_id));
-    }
-
-    // Clear current account if it's being deleted
-    if index.current_account_id.as_deref() == Some(account_id) {
-        index.current_account_id = index.accounts.first().map(|s| s.id.clone());
-    }
-
-    save_account_index(&index)?;
-
-    // Delete account file
-    let accounts_dir = get_accounts_dir()?;
-    let account_path = accounts_dir.join(format!("{}.json", account_id));
-
-    if account_path.exists() {
-        fs::remove_file(&account_path)
-            .map_err(|e| format!("failed_to_delete_account_file: {}", e))?;
-    }
-
-    Ok(())
+    delete_accounts(&[account_id.to_owned()])
 }
 
-/// Batch delete accounts (atomic index operation)
+/// Validate the complete selection before modifying either account files or the index.
 pub fn delete_accounts(account_ids: &[String]) -> Result<(), String> {
     let _lock = ACCOUNT_INDEX_LOCK
         .lock()
-        .map_err(|e| format!("failed_to_acquire_lock: {}", e))?;
+        .map_err(|_| "Cannot lock the account index.")?;
     let mut index = load_account_index()?;
-
     let accounts_dir = get_accounts_dir()?;
-
-    for account_id in account_ids {
-        // Remove from index
-        index.accounts.retain(|s| &s.id != account_id);
-        clear_target_selection(&mut index, account_id);
-
-        // Clear current account if it's being deleted
-        if index.current_account_id.as_deref() == Some(account_id) {
-            index.current_account_id = None;
+    let _storage = account_storage_lock(&accounts_dir)?;
+    let selected = account_ids.iter().collect::<std::collections::HashSet<_>>();
+    let mut files = Vec::with_capacity(selected.len());
+    for id in selected {
+        let path = account_file(&accounts_dir, id)?;
+        if !index.accounts.iter().any(|account| account.id == *id) {
+            return Err("Select existing accounts to delete.".into());
         }
-
-        // Delete account file
-        let account_path = accounts_dir.join(format!("{}.json", account_id));
-        if account_path.exists() {
-            let _ = fs::remove_file(&account_path);
-        }
+        files.push((id, path));
     }
 
-    // If current account is empty, use first one as default
-    if index.current_account_id.is_none() {
-        index.current_account_id = index.accounts.first().map(|s| s.id.clone());
+    let mut failed = false;
+    let mut deleted_current = false;
+    for (id, path) in files {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        }
+        index.accounts.retain(|account| account.id != *id);
+        clear_target_selection(&mut index, id);
+        if index.current_account_id.as_deref() == Some(id) {
+            deleted_current = true;
+        }
     }
-
-    save_account_index(&index)
+    if deleted_current || (account_ids.len() > 1 && index.current_account_id.is_none()) {
+        index.current_account_id = index.accounts.first().map(|account| account.id.clone());
+    }
+    save_account_index(&index)?;
+    if failed { return Err("Some account files could not be deleted.".into()); }
+    Ok(())
 }
 
 /// Reorder account list
