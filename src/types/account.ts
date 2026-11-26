@@ -2,8 +2,6 @@ export interface Account {
     id: string;
     email: string;
     name?: string;
-    token: TokenData;
-    device_profile?: DeviceProfile;
     quota?: QuotaData;
     disabled?: boolean;
     disabled_reason?: string;
@@ -16,15 +14,6 @@ export interface Account {
     validation_url?: string;
     created_at: number;
     last_used: number;
-}
-
-export interface TokenData {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-    expiry_timestamp: number;
-    token_type: string;
-    email?: string;
 }
 
 export interface QuotaData {
@@ -73,11 +62,4 @@ export interface QuotaGroup {
     display_name: string;
     description?: string;
     buckets: QuotaBucket[];
-}
-
-export interface DeviceProfile {
-    machine_id: string;
-    mac_machine_id: string;
-    dev_device_id: string;
-    sqm_id: string;
 }

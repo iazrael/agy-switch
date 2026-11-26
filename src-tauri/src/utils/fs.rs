@@ -52,6 +52,84 @@ fn atomic_replace_file(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::rename(src, dst).map_err(|e| format!("rename failed: {}", e))
 }
 
+/// Create or tighten a directory owned exclusively by this application's data store.
+pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path).map_err(|_| "Cannot create the private data directory.")?;
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| "Cannot inspect the private data directory.")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("The private data directory must be a regular directory.".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("The private data directory must be owned by the current user.".into());
+        }
+        if metadata.mode() & 0o777 != 0o700 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "Cannot protect the private data directory.")?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("The private data directory must not be a reparse point.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Open only a regular local credential file. Tighten legacy Unix permissions on the open handle.
+pub(crate) fn open_private_file(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|_| "Cannot open account file.")?;
+    let metadata = file.metadata().map_err(|_| "Cannot inspect account file.")?;
+    if !metadata.is_file() {
+        return Err("Account data must be a regular file.".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("Account data must be owned by the current user.".into());
+        }
+        if metadata.mode() & 0o777 != 0o600 {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| "Cannot protect account file.")?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("Account data must not be a reparse point.".into());
+        }
+    }
+    Ok(file)
+}
+
 /// Atomically write bytes to a file at `target_path`.
 ///
 /// Steps:

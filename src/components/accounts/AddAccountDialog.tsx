@@ -372,7 +372,7 @@ function AddAccountDialog({ onAdd, showText = true }: AddAccountDialogProps) {
         setMessage(t('accounts.add.oauth.manual_submitting'));
 
         try {
-            await invoke('submit_oauth_code', { code: manualCode.trim(), state: null });
+            await invoke('submit_oauth_code', { callbackUrl: manualCode.trim() });
 
             // 提交成功反馈
             setStatus('success');

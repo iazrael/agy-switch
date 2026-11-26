@@ -1,4 +1,6 @@
 use crate::modules::oauth;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use ring::{digest, rand::{SecureRandom, SystemRandom}};
 use std::sync::{Mutex, OnceLock};
 use tauri::Url;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,6 +14,7 @@ struct OAuthFlowState {
     auth_url: String,
     redirect_uri: String,
     state: String,
+    code_verifier: String,
     client_key: String,
     cancel_tx: watch::Sender<bool>,
     code_tx: mpsc::Sender<Result<String, String>>,
@@ -66,22 +69,32 @@ async fn read_callback(mut stream: TcpStream, expected_state: String) -> Option<
         if parts.next()? != "GET" { return None; }
         let target = parts.next()?;
         if !matches!(parts.next(), Some("HTTP/1.1" | "HTTP/1.0")) || parts.next().is_some() { return None; }
+        if !target.starts_with("/oauth-callback?") { return None; }
         let url = Url::parse(&format!("http://localhost{target}")).ok()?;
-        if url.path() != "/oauth-callback" || url.fragment().is_some() { return None; }
-        let values = |key: &str| url.query_pairs().filter(|(name, _)| name == key).map(|(_, value)| value.into_owned()).collect::<Vec<_>>();
-        let states = values("state");
-        if states.len() != 1 || states[0] != expected_state { return None; }
-        let codes = values("code");
-        let errors = values("error");
-        if codes.len() == 1 && !codes[0].is_empty() && errors.is_empty() {
-            Some(Ok(codes[0].clone()))
-        } else if codes.is_empty() && errors.len() == 1 {
-            Some(Err("OAuth authorization was declined. Start a new authorization flow.".into()))
-        } else { None }
+        callback_result(&url, &expected_state)
     });
     let response = if matches!(result, Some(Ok(_))) { oauth_success_html() } else { oauth_fail_html() };
     let _ = tokio::time::timeout(Duration::from_secs(1), stream.write_all(response.as_bytes())).await;
     result
+}
+
+fn callback_result(url: &Url, expected_state: &str) -> Option<Result<String, String>> {
+    if url.path() != "/oauth-callback" || url.fragment().is_some() { return None; }
+    let values = |key: &str| url.query_pairs()
+        .filter(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+        .collect::<Vec<_>>();
+    let states = values("state");
+    if states.len() != 1 || states[0] != expected_state { return None; }
+    let codes = values("code");
+    let errors = values("error");
+    if codes.len() == 1 && !codes[0].is_empty() && errors.is_empty() {
+        Some(Ok(codes.into_iter().next()?))
+    } else if codes.is_empty() && errors.len() == 1 {
+        Some(Err("OAuth authorization was declined. Start a new authorization flow.".into()))
+    } else {
+        None
+    }
 }
 
 async fn listen_for_callback(
@@ -103,7 +116,7 @@ async fn listen_for_callback(
                     if tx.try_send(result).is_ok() {
                         if let Some(h) = &app_handle {
                             use tauri::Emitter;
-                            let _ = h.emit("oauth-callback-received", ());
+                            let _ = h.emit_to("main", "oauth-callback-received", ());
                         }
                     }
                     break;
@@ -138,12 +151,12 @@ async fn wait_for_code(
     }
 }
 
-async fn receive_oauth_code() -> Result<(String, String, String), String> {
-    let (mut rx, mut cancel, expires_at, redirect_uri, client_key, expected_state) = {
+async fn receive_oauth_code() -> Result<(String, String, String, String), String> {
+    let (mut rx, mut cancel, expires_at, redirect_uri, client_key, expected_state, code_verifier) = {
         let mut lock = get_oauth_flow_state().lock().map_err(|_| "OAuth state lock corrupted")?;
         let state = lock.as_mut().ok_or("OAuth state does not exist")?;
         let rx = state.code_rx.take().ok_or("OAuth authorization already in progress")?;
-        (rx, state.cancel_tx.subscribe(), state.expires_at, state.redirect_uri.clone(), state.client_key.clone(), state.state.clone())
+        (rx, state.cancel_tx.subscribe(), state.expires_at, state.redirect_uri.clone(), state.client_key.clone(), state.state.clone(), state.code_verifier.clone())
     };
     let result = wait_for_code(&mut rx, &mut cancel, expires_at).await;
     if let Ok(mut lock) = get_oauth_flow_state().lock() {
@@ -152,7 +165,7 @@ async fn receive_oauth_code() -> Result<(String, String, String), String> {
             if let Some(state) = lock.take() { let _ = state.cancel_tx.send(true); }
         }
     }
-    Ok((result?, redirect_uri, client_key))
+    Ok((result?, redirect_uri, client_key, code_verifier))
 }
 
 async fn ensure_oauth_flow_prepared(
@@ -246,9 +259,14 @@ async fn ensure_oauth_flow_prepared(
     };
 
     let state_str = uuid::Uuid::new_v4().to_string();
+    let mut verifier_bytes = [0u8; 32];
+    SystemRandom::new().fill(&mut verifier_bytes).map_err(|_| "OAuth random generation failed")?;
+    let code_verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+    let code_challenge = URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, code_verifier.as_bytes()));
     let (auth_url, resolved_client_key) = oauth::get_auth_url_with_client(
         &redirect_uri,
         &state_str,
+        &code_challenge,
         requested_client_key.as_deref(),
     )?;
 
@@ -272,6 +290,7 @@ async fn ensure_oauth_flow_prepared(
             auth_url: auth_url.clone(),
             redirect_uri,
             state: state_str,
+            code_verifier,
             client_key: resolved_client_key,
             cancel_tx,
             code_tx,
@@ -283,7 +302,7 @@ async fn ensure_oauth_flow_prepared(
     // Send event to frontend (for display/copying link)
     if let Some(h) = app_handle {
         use tauri::Emitter;
-        let _ = h.emit("oauth-url-generated", &auth_url);
+        let _ = h.emit_to("main", "oauth-url-generated", &auth_url);
     }
 
     Ok(auth_url)
@@ -323,8 +342,8 @@ pub async fn start_oauth_flow(
             .map_err(|e| format!("failed_to_open_browser: {}", e))?;
     }
 
-    let (code, redirect_uri, client_key) = receive_oauth_code().await?;
-    oauth::exchange_code_with_client(&code, &redirect_uri, Some(&client_key)).await
+    let (code, redirect_uri, client_key, code_verifier) = receive_oauth_code().await?;
+    oauth::exchange_code_with_client(&code, &redirect_uri, Some(&client_key), &code_verifier).await
 }
 
 /// Завершить OAuth flow без открытия браузера.
@@ -336,58 +355,44 @@ pub async fn complete_oauth_flow(
     // Ensure URL + listeners exist
     let _ = ensure_oauth_flow_prepared(app_handle, None).await?;
 
-    let (code, redirect_uri, client_key) = receive_oauth_code().await?;
-    oauth::exchange_code_with_client(&code, &redirect_uri, Some(&client_key)).await
+    let (code, redirect_uri, client_key, code_verifier) = receive_oauth_code().await?;
+    oauth::exchange_code_with_client(&code, &redirect_uri, Some(&client_key), &code_verifier).await
 }
 
-/// Manually submit an OAuth code to complete the flow.
-/// This is used when the user manually copies the code/URL from the browser
-/// because the localhost callback could not be reached in a remote environment.
-pub async fn submit_oauth_code(
-    code_input: String,
-    state_input: Option<String>,
-) -> Result<(), String> {
-    let tx = {
-        let lock = get_oauth_flow_state().lock().map_err(|e| e.to_string())?;
-        if let Some(state) = lock.as_ref() {
-            // Verify state if provided
-            if let Some(provided_state) = state_input {
-                if provided_state != state.state {
-                    return Err("OAuth state mismatch (CSRF protection)".to_string());
-                }
-            }
-            state.code_tx.clone()
-        } else {
-            return Err("No active OAuth flow found".to_string());
-        }
-    };
+/// Accept the original browser redirect when a loopback callback is unavailable.
+pub fn submit_oauth_callback(callback_url: &str) -> Result<(), String> {
+    let lock = get_oauth_flow_state().lock().map_err(|_| "OAuth state lock corrupted")?;
+    let flow = lock.as_ref().filter(|flow| Instant::now() < flow.expires_at)
+        .ok_or("No active OAuth flow found")?;
+    let result = manual_callback_result(callback_url, &flow.redirect_uri, &flow.state)?;
+    flow.code_tx.try_send(result)
+        .map_err(|_| "OAuth flow already completed or is no longer waiting for a callback".into())
+}
 
-    // Extract code if it's a URL
-    let code = if code_input.starts_with("http") {
-        if let Ok(url) = Url::parse(&code_input) {
-            url.query_pairs()
-                .find(|(k, _)| k == "code")
-                .map(|(_, v)| v.to_string())
-                .unwrap_or(code_input)
-        } else {
-            code_input
-        }
-    } else {
-        code_input
-    };
-
-    crate::modules::logger::log_info("Received manual OAuth code submission");
-
-    // Send to the channel
-    tx.try_send(Ok(code))
-        .map_err(|_| "OAuth flow already completed or is no longer waiting for a code".to_string())?;
-
-    Ok(())
+fn manual_callback_result(callback: &str, redirect: &str, state: &str) -> Result<Result<String, String>, String> {
+    const INVALID_CALLBACK: &str = "Paste the complete callback URL for the current authorization.";
+    if callback.len() > 8192 { return Err(INVALID_CALLBACK.into()); }
+    let url = Url::parse(callback).map_err(|_| INVALID_CALLBACK)?;
+    let expected = Url::parse(redirect).map_err(|_| INVALID_CALLBACK)?;
+    if url.origin() != expected.origin() || !url.username().is_empty() || url.password().is_some() {
+        return Err(INVALID_CALLBACK.into());
+    }
+    callback_result(&url, state).ok_or_else(|| INVALID_CALLBACK.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_callback_requires_the_current_redirect_and_state() {
+        let redirect = "http://127.0.0.1:54321/oauth-callback";
+        let accepted = format!("{redirect}?code=fixture-code&state=fixture-state");
+        assert_eq!(manual_callback_result(&accepted, redirect, "fixture-state").unwrap().unwrap(), "fixture-code");
+        assert!(manual_callback_result(&accepted, redirect, "different-fixture-state").is_err());
+        assert!(manual_callback_result("fixture-code", redirect, "fixture-state").is_err());
+        assert!(manual_callback_result(&format!("{redirect}?code=fixture-code"), redirect, "fixture-state").is_err());
+    }
 
     async fn fixture(lifetime: Duration) -> (std::net::SocketAddr, mpsc::Receiver<Result<String, String>>, watch::Sender<bool>, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,7 +1,5 @@
 use crate::modules::{cli_credentials, db, device, process};
 use std::fs;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
 pub trait SystemIntegration: Send + Sync {
     /// 当切换账号时执行的系统层操作（如杀进程、写入文件、注入数据库）
@@ -258,45 +256,8 @@ pub(crate) fn write_to_system_keyring(
         account.email
     ));
 
-    // 2. 跨平台凭据注入
     #[cfg(target_os = "macos")]
-    {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
-        let encoded_payload = STANDARD.encode(&payload_json);
-        let full_keyring_value = format!("go-keyring-base64:{}", encoded_payload);
-
-        // 2.1 macOS Keychain Access
-        // 删除旧的
-        let _ = Command::new("security")
-            .args([
-                "delete-generic-password",
-                "-s",
-                "gemini",
-                "-a",
-                "antigravity",
-            ])
-            .output();
-
-        // 写入新的 (-A 参数允许所有本地应用免密码、无感直接读取凭据)
-        let output = Command::new("security")
-            .args([
-                "add-generic-password",
-                "-s",
-                "gemini",
-                "-a",
-                "antigravity",
-                "-w",
-                &full_keyring_value,
-                "-A",
-            ])
-            .output()
-            .map_err(|e| format!("Failed to execute security command: {}", e))?;
-
-        if !output.status.success() {
-            let err_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("macOS security command failed: {}", err_msg.trim()));
-        }
-    }
+    super::macos_keychain::write(&payload_json)?;
 
     #[cfg(target_os = "windows")]
     {
@@ -404,35 +365,7 @@ pub(crate) fn write_to_system_keyring(
 pub fn read_from_system_keyring() -> Result<crate::modules::migration::ImportedOAuthState, String> {
     #[cfg(target_os = "macos")]
     {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
-        let output = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                "gemini",
-                "-a",
-                "antigravity",
-                "-w",
-            ])
-            .output()
-            .map_err(|e| format!("Failed to execute security command: {}", e))?;
-
-        if !output.status.success() {
-            return Err("No credential found in macOS Keychain".to_string());
-        }
-
-        let secret_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let payload_str = if secret_str.starts_with("go-keyring-base64:") {
-            let b64_part = &secret_str["go-keyring-base64:".len()..];
-            let decoded = STANDARD
-                .decode(b64_part)
-                .map_err(|e| format!("Base64 decode failed: {}", e))?;
-            String::from_utf8(decoded).map_err(|e| format!("UTF-8 decode failed: {}", e))?
-        } else {
-            secret_str
-        };
-
-        return parse_keyring_payload(&payload_str);
+        super::macos_keychain::read()
     }
 
     #[cfg(target_os = "windows")]

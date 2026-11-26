@@ -46,16 +46,26 @@ pub struct TrayTexts {
     pub identity_unavailable: String,
 }
 
-/// Load translations from JSON
-fn load_translations(lang: &str) -> HashMap<String, String> {
-    let json_content = match lang.split(['-', '_']).next().unwrap_or(lang) {
-        "zh" => include_str!("../../../src/locales/zh.json"),
-        "en" => include_str!("../../../src/locales/en.json"),
+fn locale_document(lang: &str) -> Value {
+    let source = match supported_language(lang) {
+        Some("en") => include_str!("../../../src/locales/en.json"),
         _ => include_str!("../../../src/locales/zh.json"),
     };
+    serde_json::from_str(source).unwrap_or_default()
+}
 
-    let v: Value = serde_json::from_str(json_content).unwrap_or_else(|_| serde_json::json!({}));
+pub(crate) fn account_export_dialog_title(lang: &str) -> String {
+    locale_document(lang)["accounts"]["export_dialog_title"].as_str()
+        .unwrap_or("Export account credentials").to_owned()
+}
 
+pub(crate) fn client_executable_dialog_title(lang: &str) -> String {
+    locale_document(lang)["local_settings"]["choose_executable"].as_str()
+        .unwrap_or("Choose client executable").to_owned()
+}
+
+fn load_translations(lang: &str) -> HashMap<String, String> {
+    let v = locale_document(lang);
     let mut map = HashMap::new();
 
     if let Some(tray) = v.get("tray").and_then(|t| t.as_object()) {

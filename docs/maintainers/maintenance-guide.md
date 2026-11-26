@@ -60,6 +60,24 @@ Use the relevant rows, not the whole table for every small patch.
 | Instructions or documentation | `AGENTS.md`, maintainer guides or affected user guides | Verify referenced paths/commands and rendered screenshot layout; no version bump or release solely for these changes |
 | Removing legacy code | Active Rust/TS consumers, registered commands, migration entry points and platform-only modules | Confirm the replacement path still supports saved data; run frontend build, Rust checks/tests and relevant CLI/platform checks |
 
+## Credential boundary checks
+
+Update the app command manifest and window capabilities together when changing
+IPC. The main window receives credential-free account views. The quick dashboard
+uses the narrow capability list. Keep account exports and client executable
+selection in native pickers. Run `node --test scripts/test-desktop-security.mjs`
+with the affected native and mocked-UI tests.
+
+For account storage tests, place `ABV_DATA_DIR` inside the owned temporary test
+directory so a sibling encryption key is cleaned up with the fixtures. Verify
+legacy migration, CLI metadata reads and credential round trips with synthetic
+accounts. Native GUI acceptance lets the real app perform that one-time migration
+on synthetic fixtures before snapshotting expected files; later steps still assert
+that window interaction writes no account data. Verify changes to shared Keychain
+ACLs in an isolated test keychain.
+Public release trust checks still require the configured platform signing
+identities and the final packaged artifacts.
+
 ## Continuous integration
 
 The `Build` workflow is split into parallel jobs so wall time follows the slowest job rather than the sum:

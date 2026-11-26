@@ -87,6 +87,26 @@ JSON batches are validated before importing; partial failures are counted and
 remain visible instead of being reported as complete success. The exported OAuth
 client key is used when validating restored credentials.
 
+## Local credential protection
+
+The development build encrypts managed account tokens in the shared account
+directory. A native account read upgrades an older plaintext file atomically
+when its encryption key is available. CLI list and dashboard views read cached
+metadata without unlocking the token store. Account files remain usable on the
+same machine with their original key.
+
+The default macOS store keeps its encryption key in Keychain, and Windows uses
+user-scoped DPAPI. On Linux and with a custom macOS data directory, the key is a
+private file beside the data directory with the suffix `.agy-switch-key`.
+Keep the key with the data when restoring in the same environment. Move accounts
+to a different machine using the explicit export and import workflow. Existing
+backups made before migration may still contain plaintext credentials.
+
+When the development build next updates the shared Antigravity item on macOS,
+it narrows previously open Keychain access. macOS may ask for approval when
+Antigravity or agy first accesses the item. Browser sign-in uses PKCE. If the
+browser cannot reach the app, paste the complete callback URL for that login.
+
 ## Network routing
 
 Network settings default to the system proxy. Explicit HTTP/HTTPS/ALL_PROXY

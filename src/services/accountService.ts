@@ -165,18 +165,14 @@ export interface ExportAccountsResponse {
     accounts: ExportAccountItem[];
 }
 
-export async function exportAccounts(accountIds: string[]): Promise<ExportAccountsResponse> {
-    return await invoke('export_accounts', { accountIds });
-}
-
 // 自定义标签相关
 export async function updateAccountLabel(accountId: string, label: string): Promise<void> {
     return await invoke('update_account_label', { accountId, label });
 }
 
 
-export async function saveAccountExport(accountIds: string[], path: string): Promise<number> {
-    return invoke('save_account_export', { accountIds, path });
+export async function saveAccountExport(accountIds: string[]): Promise<number | null> {
+    return invoke('save_account_export', { accountIds });
 }
 export async function importAccountTransfer(item: ExportAccountItem): Promise<Account> {
     return invoke('import_account_transfer', { item });

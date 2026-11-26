@@ -2,10 +2,52 @@ use crate::models::{Account, AppConfig, QuotaData};
 use crate::modules;
 use tauri::Emitter;
 
+/// WebView projection. Credentials and device identifiers stay in Rust.
+#[derive(serde::Serialize)]
+pub struct AccountView {
+    id: String,
+    email: String,
+    name: Option<String>,
+    quota: Option<QuotaData>,
+    disabled: bool,
+    disabled_reason: Option<String>,
+    disabled_at: Option<i64>,
+    protected_models: std::collections::HashSet<String>,
+    custom_label: Option<String>,
+    validation_blocked: bool,
+    validation_blocked_until: Option<i64>,
+    validation_blocked_reason: Option<String>,
+    validation_url: Option<String>,
+    created_at: i64,
+    last_used: i64,
+}
+
+impl From<Account> for AccountView {
+    fn from(account: Account) -> Self {
+        Self {
+            id: account.id,
+            email: account.email,
+            name: account.name,
+            quota: account.quota,
+            disabled: account.disabled,
+            disabled_reason: account.disabled_reason,
+            disabled_at: account.disabled_at,
+            protected_models: account.protected_models,
+            custom_label: account.custom_label,
+            validation_blocked: account.validation_blocked,
+            validation_blocked_until: account.validation_blocked_until,
+            validation_blocked_reason: account.validation_blocked_reason,
+            validation_url: account.validation_url,
+            created_at: account.created_at,
+            last_used: account.last_used,
+        }
+    }
+}
+
 /// 列出所有账号
 #[tauri::command]
-pub async fn list_accounts() -> Result<Vec<Account>, String> {
-    tokio::task::spawn_blocking(modules::list_accounts)
+pub async fn list_accounts() -> Result<Vec<AccountView>, String> {
+    tokio::task::spawn_blocking(|| modules::list_accounts().map(|accounts| accounts.into_iter().map(AccountView::from).collect()))
         .await
         .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
@@ -65,7 +107,7 @@ pub async fn add_account(
     app: tauri::AppHandle,
     _email: String,
     refresh_token: String,
-) -> Result<Account, String> {
+) -> Result<AccountView, String> {
     let service = modules::account_service::AccountService::new(
         crate::modules::integration::SystemManager::new(app.clone()),
     );
@@ -73,7 +115,7 @@ pub async fn add_account(
     let account = service.add_account(&refresh_token).await?;
     crate::modules::tray::update_tray_menus(&app);
 
-    Ok(account)
+    Ok(account.into())
 }
 
 /// 删除账号
@@ -148,7 +190,7 @@ pub async fn switch_account(
 
 /// 获取当前账号
 #[tauri::command]
-pub async fn get_current_account(target_ide: Option<String>) -> Result<Option<Account>, String> {
+pub async fn get_current_account(target_ide: Option<String>) -> Result<Option<AccountView>, String> {
     // println!("🚀 Backend Command: get_current_account called"); // Commented out to reduce noise for frequent calls, relies on frontend log for frequency
     // Actually user WANTS to see it.
     modules::logger::log_info("Backend Command: get_current_account called");
@@ -157,27 +199,38 @@ pub async fn get_current_account(target_ide: Option<String>) -> Result<Option<Ac
 
     if let Some(id) = account_id {
         // modules::logger::log_info(&format!("   Found current account ID: {}", id));
-        modules::load_account(&id).map(Some)
+        modules::load_account(&id).map(|account| Some(account.into()))
     } else {
         modules::logger::log_info("   No current account set");
         Ok(None)
     }
 }
 
-/// 导出账号（包含 refresh_token）
-use crate::models::AccountExportResponse;
-
+/// Credentials are written only to a destination chosen in the native save dialog.
 #[tauri::command]
-pub async fn export_accounts(account_ids: Vec<String>) -> Result<AccountExportResponse, String> {
-    tokio::task::spawn_blocking(move || modules::account::export_accounts_by_ids(&account_ids))
-        .await
-        .unwrap_or_else(|_| Err("Task panicked".to_string()))
+pub async fn save_account_export(
+    window: tauri::WebviewWindow,
+    account_ids: Vec<String>,
+) -> Result<Option<usize>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tokio::task::spawn_blocking(move || {
+        let filename = account_export_filename(chrono::Local::now().naive_local());
+        let language = modules::load_app_config().map(|config| config.language).unwrap_or_else(|_| modules::i18n::default_language());
+        let title = modules::i18n::account_export_dialog_title(&language);
+        let selected = window.dialog().file()
+            .set_parent(&window)
+            .set_title(title)
+            .set_file_name(filename)
+            .add_filter("JSON", &["json"])
+            .blocking_save_file();
+        let Some(selected) = selected else { return Ok(None); };
+        let path = selected.into_path().map_err(|_| "Choose a local file for the account export.")?;
+        modules::account::save_account_export(&account_ids, &path).map(Some)
+    }).await.map_err(|_| "Account export worker failed.".to_string())?
 }
 
-#[tauri::command]
-pub async fn save_account_export(account_ids: Vec<String>, path: String) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || modules::account::save_account_export(&account_ids, std::path::Path::new(&path)))
-        .await.map_err(|_| "Account export worker failed.".to_string())?
+fn account_export_filename(now: chrono::NaiveDateTime) -> String {
+    now.format("antigravity-accounts-%Y-%m-%d_%H-%M-%S.json").to_string()
 }
 
 async fn import_account_transfer_item(
@@ -250,8 +303,8 @@ fn parse_export_items_from_json(
 pub async fn import_account_transfer(
     app: tauri::AppHandle,
     item: crate::models::AccountExportItem,
-) -> Result<Account, String> {
-    import_account_transfer_item(&app, item).await
+) -> Result<AccountView, String> {
+    import_account_transfer_item(&app, item).await.map(AccountView::from)
 }
 
 /// 内部辅助功能：在添加或导入账号后自动刷新一次额度
@@ -326,7 +379,10 @@ pub async fn refresh_all_quotas(app_handle: tauri::AppHandle) -> Result<RefreshS
 /// 加载配置
 #[tauri::command]
 pub async fn load_config() -> Result<AppConfig, String> {
-    modules::load_app_config()
+    let mut config = modules::load_app_config()?;
+    config.antigravity_args = None;
+    config.antigravity_ide_args = None;
+    Ok(config)
 }
 
 /// 保存配置
@@ -340,13 +396,38 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_client_executable(
+    window: tauri::WebviewWindow,
+    ide: bool,
+    reset: bool,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tokio::task::spawn_blocking(move || {
+        let executable = if reset {
+            None
+        } else {
+            let language = modules::load_app_config()?.language;
+            let title = modules::i18n::client_executable_dialog_title(&language);
+            let selected = window.dialog().file().set_parent(&window).set_title(title).blocking_pick_file();
+            let Some(selected) = selected else { return Ok(false); };
+            let path = selected.into_path().map_err(|_| "Choose a local client executable.")?;
+            let path = path.to_str().ok_or("The client path cannot be represented in the configuration.")?;
+            Some(path.to_owned())
+        };
+        modules::config::set_client_executable(ide, executable)?;
+        let _ = window.emit("config://updated", ());
+        Ok(true)
+    }).await.map_err(|_| "Client executable selection failed.")?
+}
+
 // --- OAuth 命令 ---
 
 #[tauri::command]
 pub async fn start_oauth_login(
     app_handle: tauri::AppHandle,
     oauth_client_key: Option<String>,
-) -> Result<Account, String> {
+) -> Result<AccountView, String> {
     modules::logger::log_info("开始 OAuth 授权流程...");
     let service = modules::account_service::AccountService::new(
         crate::modules::integration::SystemManager::new(app_handle.clone()),
@@ -354,12 +435,12 @@ pub async fn start_oauth_login(
 
     let mut account = service.start_oauth_login(oauth_client_key).await?;
     let _ = internal_refresh_account_quota(&app_handle, &mut account).await;
-    Ok(account)
+    Ok(account.into())
 }
 
 /// 完成 OAuth 授权（不自动打开浏览器）
 #[tauri::command]
-pub async fn complete_oauth_login(app_handle: tauri::AppHandle) -> Result<Account, String> {
+pub async fn complete_oauth_login(app_handle: tauri::AppHandle) -> Result<AccountView, String> {
     modules::logger::log_info("完成 OAuth 授权流程 (manual)...");
     let service = modules::account_service::AccountService::new(
         crate::modules::integration::SystemManager::new(app_handle.clone()),
@@ -367,7 +448,7 @@ pub async fn complete_oauth_login(app_handle: tauri::AppHandle) -> Result<Accoun
 
     let mut account = service.complete_oauth_login().await?;
     let _ = internal_refresh_account_quota(&app_handle, &mut account).await;
-    Ok(account)
+    Ok(account.into())
 }
 
 /// 预生成 OAuth 授权链接 (不打开浏览器)
@@ -390,9 +471,8 @@ pub async fn cancel_oauth_login() -> Result<(), String> {
 
 /// 手动提交 OAuth Code (用于远程环境无法自动回调时)
 #[tauri::command]
-pub async fn submit_oauth_code(code: String, state: Option<String>) -> Result<(), String> {
-    modules::logger::log_info("收到手动提交 OAuth Code 请求");
-    modules::oauth_server::submit_oauth_code(code, state).await
+pub fn submit_oauth_code(callback_url: String) -> Result<(), String> {
+    modules::oauth_server::submit_oauth_callback(&callback_url)
 }
 
 #[tauri::command]
@@ -413,8 +493,14 @@ pub async fn set_active_oauth_client(client_key: String) -> Result<(), String> {
 
 // --- 导入命令 ---
 
+#[derive(serde::Serialize)]
+pub struct LocalImportView {
+    accounts: Vec<AccountView>,
+    sources: Vec<modules::migration::LocalImportSource>,
+}
+
 #[tauri::command]
-pub async fn import_local_accounts_report(app: tauri::AppHandle) -> Result<modules::migration::LocalImportReport, String> {
+pub async fn import_local_accounts_report(app: tauri::AppHandle) -> Result<LocalImportView, String> {
     let _guard = crate::cli::SwitchLock::acquire(&modules::account::get_data_dir()?)?;
     let identities = tokio::task::spawn_blocking(|| ["app", "ide"].map(|target| (target, modules::migration::get_current_identity(Some(target)))))
         .await.map_err(|_| "Local identity discovery failed.".to_string())?;
@@ -428,14 +514,14 @@ pub async fn import_local_accounts_report(app: tauri::AppHandle) -> Result<modul
     }
     for mut account in report.accounts.clone() { let _ = internal_refresh_account_quota(&app, &mut account).await; }
     crate::modules::tray::update_tray_menus(&app);
-    Ok(report)
+    Ok(LocalImportView { accounts: report.accounts.into_iter().map(AccountView::from).collect(), sources: report.sources })
 }
 
 #[tauri::command]
 pub async fn import_from_db(
     app: tauri::AppHandle,
     target_ide: Option<String>,
-) -> Result<Vec<Account>, String> {
+) -> Result<Vec<AccountView>, String> {
     let _switch_guard = crate::cli::SwitchLock::acquire(&modules::account::get_data_dir()?)?;
     let target = target_ide.clone();
     let identity = tokio::task::spawn_blocking(move || {
@@ -461,7 +547,7 @@ pub async fn import_from_db(
 
     crate::modules::tray::update_tray_menus(&app);
 
-    Ok(imported_accounts)
+    Ok(imported_accounts.into_iter().map(AccountView::from).collect())
 }
 
 #[tauri::command]
@@ -510,8 +596,8 @@ pub struct AccountFileImportReport {
 }
 
 #[tauri::command]
-pub async fn sync_account_from_db(app: tauri::AppHandle) -> Result<Option<Account>, String> {
-    modules::account_sync::synchronize(app).await
+pub async fn sync_account_from_db(app: tauri::AppHandle) -> Result<Option<AccountView>, String> {
+    modules::account_sync::synchronize(app).await.map(|account| account.map(AccountView::from))
 }
 
 pub(crate) async fn sync_account_from_db_internal(app: tauri::AppHandle) -> Result<Option<Account>, String> {
@@ -734,5 +820,33 @@ mod transfer_tests {
             r#"[{"refresh_token":"1//fixture"},{"refresh_token":""}]"#, r#"{"refresh_token":"invalid"}"#, "not-json"] {
             assert!(parse_export_items_from_json(text).is_err(), "{text}");
         }
+    }
+}
+
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_account_response_contains_no_credentials() {
+        let account = Account::new(
+            "fixture-id".into(), "fixture@example.test".into(),
+            crate::models::TokenData::new(
+                "fixture-access".into(), "fixture-refresh".into(), 3600, None, None, None, false, None,
+            ),
+        );
+        let json = serde_json::to_value(AccountView::from(account)).unwrap();
+        assert_eq!(json["id"], "fixture-id");
+        assert!(json.get("token").is_none());
+        assert!(json.get("device_profile").is_none());
+        assert!(!json.to_string().contains("fixture-refresh"));
+    }
+
+    #[test]
+    fn native_export_filename_uses_local_calendar_time() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let time = date.and_hms_opt(3, 5, 0).unwrap();
+        assert_eq!(account_export_filename(time), "antigravity-accounts-2026-10-12_03-05-00.json");
     }
 }

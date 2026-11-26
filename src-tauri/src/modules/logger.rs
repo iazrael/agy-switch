@@ -18,10 +18,7 @@ pub fn get_log_dir() -> Result<PathBuf, String> {
     let data_dir = get_data_dir()?;
     let log_dir = data_dir.join("logs");
 
-    if !log_dir.exists() {
-        fs::create_dir_all(&log_dir)
-            .map_err(|e| format!("Failed to create log directory: {}", e))?;
-    }
+    crate::utils::fs::private_directory(&log_dir)?;
 
     Ok(log_dir)
 }

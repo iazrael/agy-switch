@@ -232,8 +232,8 @@
         "copied": "已复制",
         "link_label": "授权链接",
         "link_click_to_copy": "点击复制",
-        "manual_hint": "浏览器没有自动跳转？请在此处粘贴回调链接或 Authorization Code：",
-        "manual_placeholder": "粘贴回调链接或 Code...",
+        "manual_hint": "浏览器未能跳回应用？请粘贴地址栏里的完整回调链接。",
+        "manual_placeholder": "粘贴完整回调链接",
         "error_no_flow": "请先点击“开始 OAuth 授权”",
         "web_hint": "将在新窗口中打开 Google 登录页",
         "error_no_url": "无法获取 OAuth URL",
@@ -303,6 +303,7 @@
     "select_account": "选择账号 {{email}}",
     "select_page": "选择本页账号",
     "export_account": "导出账号",
+    "export_dialog_title": "导出账号登录凭据",
     "export_selected": "导出所选 {{count}} 个账号",
     "export_success": "已导出 {{count}} 个账号",
     "export_failed": "导出失败：{{error}}"

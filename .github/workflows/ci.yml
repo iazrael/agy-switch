@@ -87,6 +87,9 @@ jobs:
       - name: Test desktop preference UI races
         run: node scripts/test-desktop-settings.mjs && node scripts/test-account-transfer.mjs
 
+      - name: Test desktop security boundaries
+        run: node --test scripts/test-desktop-security.mjs
+
       - name: Test Homebrew cask generation and release assets
         run: node --test scripts/test-homebrew-generator.mjs scripts/test-release.mjs scripts/test-update-assets.mjs
 
