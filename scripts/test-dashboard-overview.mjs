@@ -55,11 +55,11 @@ test('scope and reserve affect readiness without changing the quota mean', () =>
     assert.equal(project(snapshot, { quota_scope: 'gemini' }, now, 30).accounts.available, 2);
     assert.deepEqual(project(snapshot, {}, now, NaN).accounts, project(snapshot).accounts);
 });
-test('missing windows and unreadable/protected accounts stay unknown; known low still unavailable', () => {
+test('partial known windows count as available; unreadable/protected accounts stay unknown; known low still unavailable', () => {
     const snapshot = makeDashboardSnapshot(now);
     snapshot.accounts[0].quota.groups.forEach(group => group.buckets = group.buckets.filter(bucket => bucket.window === 'weekly'));
     snapshot.accounts[1].protected_models = ['gemini']; snapshot.accounts[2].read_status = 'failed';
-    assert.deepEqual(project(snapshot).accounts, { total: 5, available: 0, unavailable: 1, unknown: 4 });
+    assert.deepEqual(project(snapshot).accounts, { total: 5, available: 1, unavailable: 1, unknown: 3 });
     snapshot.accounts[0].quota.groups[0].buckets[0].remaining_fraction = 0;
     assert.equal(project(snapshot).accounts.unavailable, 2);
 });
@@ -73,7 +73,8 @@ test('missing all data is unknown, while an empty snapshot reports an accurate z
 test('ambiguous buckets and invalid future observations cannot report usable quota', () => {
     const snapshot = makeDashboardSnapshot(now); snapshot.accounts = [snapshot.accounts[0]]; snapshot.indexed_total = 1;
     snapshot.accounts[0].quota.groups[1].buckets[0].bucket_id = snapshot.accounts[0].quota.groups[0].buckets[0].bucket_id;
-    assert.equal(project(snapshot).windows['5h'].used, null); assert.equal(project(snapshot).accounts.unknown, 1);
+    assert.equal(project(snapshot).windows['5h'].used, null);
+    assert.deepEqual(project(snapshot).accounts, { total: 1, available: 1, unavailable: 0, unknown: 0 });
     snapshot.accounts[0].quota.last_updated = now / 1000 + 301;
     assert.equal(project(snapshot).windows['5h'].used, null);
 });

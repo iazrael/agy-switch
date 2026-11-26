@@ -79,13 +79,14 @@ test('missing session data cannot borrow weekly or model quota',()=>{
 test('unknown fractions, unnamed buckets, invalid and expired resets never become capacity',()=>{
   for(const tweak of [b=>b.remaining_fraction=null,b=>b.remaining_fraction=-.1,b=>b.remaining_fraction=1.1,b=>b.bucket_id='',b=>b.reset_time='',b=>b.reset_time='bad',b=>b.reset_time=new Date(now-1).toISOString()]) {
     const a=account('a');tweak(a.quota.groups[0].buckets[0]);
-    assert.equal(aggregateMenuBar(views([a]),'all','5h').remaining,null);
+    assert.equal(aggregateMenuBar(views([a]),'gemini','5h').remaining,null);
+    assert.deepEqual(aggregateMenuBar(views([a]),'all','5h'),{remaining:40,usable:1,covered:1,total:1});
   }
 });
-test('all-series requires complete selected-family coverage',()=>{
+test('all-series averages known families and counts partial coverage',()=>{
   const a=account('a');a.quota.groups.pop();
   assert.equal(aggregateMenuBar(views([a]),'gemini','5h').remaining,80);
-  assert.equal(aggregateMenuBar(views([a]),'all','5h').covered,0);
+  assert.deepEqual(aggregateMenuBar(views([a]),'all','5h'),{remaining:80,usable:1,covered:1,total:1});
 });
 test('future cache timestamps and invalid freshness settings cannot bypass expiry',()=>{
   const a=account('future');a.quota.last_updated=now/1000+3600;
