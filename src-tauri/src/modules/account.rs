@@ -773,7 +773,8 @@ fn write_account_unlocked(path: &std::path::Path, account: &Account) -> Result<(
     let mut document = serde_json::to_value(account).map_err(|_| "Cannot encode account data.")?;
     document["token"] = serde_json::Value::String(sealed);
     let content = serde_json::to_vec_pretty(&document).map_err(|_| "Cannot encode account data.")?;
-    crate::utils::fs::write_atomic(path, &content).map_err(|_| "Cannot save the account file.")
+    crate::utils::fs::write_atomic(path, &content)
+        .map_err(|_| "Cannot save the account file.".to_string())
 }
 
 fn save_account_at_path(path: &std::path::Path, account: &Account) -> Result<(), String> {
