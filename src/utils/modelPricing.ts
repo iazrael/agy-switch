@@ -11,7 +11,7 @@ const pricingKeys = (model: string) => {
     const name = model.toLowerCase().replace(/-n$/, '');
     const tokens = name.match(/[a-z]+|[0-9]+/g) || [];
     const exact = tokens.join('-');
-    const gemini = /^gemini-([0-9]+(?:-[0-9]+)*)-(flash(?:-lite)?|pro|argon|carbon|hydrogen)(?:-(.*))?$/.exec(exact);
+    const gemini = /^gemini-([0-9]+(?:-[0-9]+)*)-(flash(?:-lite)?|pro|argon|carbon|neon|hydrogen)(?:-(.*))?$/.exec(exact);
     if (gemini) {
         const suffix = gemini[3]?.split('-') || [];
         const distinctVariant = suffix.some(token => ['lite', 'image', 'vision', 'audio', 'tts', 'live', 'embedding', 'embeddings', 'robotics', 'native'].includes(token));

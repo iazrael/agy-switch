@@ -9,7 +9,7 @@ export function categorizeModel(name: string): ModelCategory {
     const isGemini = n.startsWith('gemini-');
     const isImage = (isGemini && n.includes('image')) || n.startsWith('image') || n.startsWith('imagen');
     if (isImage) return n.includes('flash') ? 'gemini-flash-image' : 'gemini-pro-image';
-    if (isGemini && (n.includes('carbon') || n.includes('argon') || n.includes('orchestrator'))) return 'gemini-pro';
+    if (isGemini && (n.includes('carbon') || n.includes('argon') || n.includes('neon') || n.includes('orchestrator'))) return 'gemini-pro';
     if (isGemini && (n.includes('hydrogen') || n.includes('flash'))) return 'gemini-flash';
     if (isGemini && n.includes('pro')) return 'gemini-pro';
     if (n.includes('claude') || n.includes('opus') || n.includes('sonnet') || n.includes('haiku')) return 'claude';
@@ -30,6 +30,11 @@ const DEFAULT_MODEL_LABELS: Record<string, string> = {
     'gemini-4-argon-high': 'Gemini 4 Argon (High)',
     'gemini-4-argon-medium': 'Gemini 4 Argon (Medium)',
     'gemini-4-argon-low': 'Gemini 4 Argon (Low)',
+    'gemini-4-neon': 'Gemini 4 Neon',
+    'gemini-4-neon-xhigh': 'Gemini 4 Neon (Extra)',
+    'gemini-4-neon-high': 'Gemini 4 Neon (High)',
+    'gemini-4-neon-medium': 'Gemini 4 Neon (Medium)',
+    'gemini-4-neon-low': 'Gemini 4 Neon (Low)',
     'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
     'gemini-4-hydrogen-xhigh': 'Gemini 4 Hydrogen (Extra)',
     'gemini-4-hydrogen-high': 'Gemini 4 Hydrogen (High)',
@@ -107,6 +112,9 @@ export function getCanonicalModelKey(rawId: string): string {
     if (id.startsWith('gemini-4-argon')) {
         return 'gemini-4-argon';
     }
+    if (id.startsWith('gemini-4-neon')) {
+        return 'gemini-4-neon';
+    }
     if (id.startsWith('gemini-4-hydrogen')) {
         return 'gemini-4-hydrogen';
     }
@@ -172,6 +180,7 @@ export function getCanonicalModelDisplayName(keyOrRawId: string): string {
     const knownLabels: Record<string, string> = {
         'gemini-4-carbon': 'Gemini 4 Carbon',
         'gemini-4-argon': 'Gemini 4 Argon',
+        'gemini-4-neon': 'Gemini 4 Neon',
         'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
         'gemini-3.8-flash': 'Gemini 3.8 Flash',
         'gemini-3.1-pro': 'Gemini 3.1 Pro',
@@ -223,6 +232,7 @@ export function getCanonicalModelSublabel(keyOrRawId: string, format: (tiers: st
         case 'gemini-4-carbon':
         case 'gemini-4-argon':
             return format('Low / Medium / High');
+        case 'gemini-4-neon':
         case 'gemini-4-hydrogen':
             return format('Low / Medium / High / Extra');
         case 'gemini-3.8-flash':
@@ -244,7 +254,7 @@ export function getCanonicalModelSublabel(keyOrRawId: string, format: (tiers: st
 export function getCanonicalModelTag(keyOrRawId: string): string | undefined {
     const canon = getCanonicalModelKey(keyOrRawId);
     if (canon.includes('orchestrator')) return 'ORCH';
-    if (canon.includes('pro') || canon.includes('carbon') || canon.includes('argon')) return 'PRO';
+    if (canon.includes('pro') || canon.includes('carbon') || canon.includes('argon') || canon.includes('neon')) return 'PRO';
     if (canon.includes('image')) return 'IMAGE';
     if (canon.includes('lite')) return 'LITE';
     if (canon.includes('flash') || canon.includes('hydrogen')) return 'FLASH';
@@ -263,7 +273,7 @@ export function findQuotaModel<T extends { name: string }>(
 ): T | undefined {
     if (!models || models.length === 0) return undefined;
     const preferred: Partial<Record<ModelCategory, string[]>> = {
-        'gemini-pro': ['gemini-4-carbon-high', 'gemini-4-carbon', 'gemini-4-argon-high', 'gemini-4-argon-medium', 'gemini-4-argon-low', 'gemini-4-argon', 'gemini-pro-orchestrator', 'gemini-pro-agent', 'gemini-3.1-pro-high', 'gemini-3.1-pro', 'gemini-3.1-pro-low', 'gemini-2.5-pro'],
+        'gemini-pro': ['gemini-4-carbon-high', 'gemini-4-carbon', 'gemini-4-argon-high', 'gemini-4-argon-medium', 'gemini-4-argon-low', 'gemini-4-argon', 'gemini-4-neon-xhigh', 'gemini-4-neon-high', 'gemini-4-neon', 'gemini-pro-orchestrator', 'gemini-pro-agent', 'gemini-3.1-pro-high', 'gemini-3.1-pro', 'gemini-3.1-pro-low', 'gemini-2.5-pro'],
         'gemini-flash': ['gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen', 'gemini-3-flash-agent', 'gemini-3-flash', 'gemini-3.5-flash'],
         'claude': ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6-thinking'],
     };

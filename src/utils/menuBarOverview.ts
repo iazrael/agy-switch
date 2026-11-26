@@ -92,12 +92,14 @@ export function aggregateCarbon(accounts: AccountQuotaView[]) {
  * headroom, never a token capacity estimate or a sum of independent allowances. */
 export function aggregateMenuBar(accounts: AccountQuotaView[], scope: MenuBarQuotaScope, window: QuotaWindow, threshold = 10) {
   const families: QuotaFamily[] = scope === 'all' ? ['gemini', 'other'] : [scope];
-  const valid = accounts.filter(view => families.every(family => view.windows[window][family].remaining !== null));
-  const values = valid.flatMap(view => families.map(family => view.windows[window][family].remaining as number));
+  const covered = accounts
+    .map(view => families.map(family => view.windows[window][family].remaining).filter((value): value is number => value !== null))
+    .filter(values => values.length > 0);
+  const values = covered.flat();
   const cutoff = Number.isFinite(threshold) && threshold >= 1 && threshold <= 99 ? threshold : 10;
   return { remaining: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
-    usable: valid.filter(view => families.every(family => (view.windows[window][family].remaining as number) > cutoff)).length,
-    covered: valid.length, total: accounts.length };
+    usable: covered.filter(vals => vals.every(value => value > cutoff)).length,
+    covered: covered.length, total: accounts.length };
 }
 
 export function quotaDisplay(value: number | null): string {
