@@ -37,9 +37,9 @@ test('ten-card catalog retains explicit five-card order, empty selection and ded
     assert.equal(dashboardCards(undefined).length, 10);
     for (const count of [5, 6, 7, 8, 9, 10]) assert.match(dashboardGridClass(count), /lg:grid-cols-5/);
 });
-test('account status covers known usable, disabled, exhausted and unknown accounts', () => {
+test('account status covers available, low, unavailable and unknown accounts', () => {
     const result = project(makeDashboardSnapshot(now));
-    assert.deepEqual(result.accounts, { total: 5, available: 2, unavailable: 2, unknown: 1 });
+    assert.deepEqual(result.accounts, { total: 5, available: 2, lowQuota: 1, unavailable: 1, unknown: 1 });
 });
 test('used percentages are complements of the same menu mean, including observed zero', () => {
     const result = project(makeDashboardSnapshot(now));
@@ -51,30 +51,30 @@ test('used percentages are complements of the same menu mean, including observed
 test('scope and reserve affect readiness without changing the quota mean', () => {
     const snapshot = makeDashboardSnapshot(now);
     assert.equal(project(snapshot, { quota_scope: 'gemini' }).windows['5h'].used, 40);
-    assert.deepEqual(project(snapshot, {}, now, 30).accounts, { total: 5, available: 1, unavailable: 3, unknown: 1 });
+    assert.deepEqual(project(snapshot, {}, now, 30).accounts, { total: 5, available: 1, lowQuota: 2, unavailable: 1, unknown: 1 });
     assert.equal(project(snapshot, { quota_scope: 'gemini' }, now, 30).accounts.available, 2);
     assert.deepEqual(project(snapshot, {}, now, NaN).accounts, project(snapshot).accounts);
 });
-test('partial known windows count as available; unreadable/protected accounts stay unknown; known low still unavailable', () => {
+test('partial known windows count as available; low quota is counted separately from unavailable', () => {
     const snapshot = makeDashboardSnapshot(now);
     snapshot.accounts[0].quota.groups.forEach(group => group.buckets = group.buckets.filter(bucket => bucket.window === 'weekly'));
     snapshot.accounts[1].protected_models = ['gemini']; snapshot.accounts[2].read_status = 'failed';
-    assert.deepEqual(project(snapshot).accounts, { total: 5, available: 1, unavailable: 1, unknown: 3 });
+    assert.deepEqual(project(snapshot).accounts, { total: 5, available: 1, lowQuota: 1, unavailable: 0, unknown: 3 });
     snapshot.accounts[0].quota.groups[0].buckets[0].remaining_fraction = 0;
-    assert.equal(project(snapshot).accounts.unavailable, 2);
+    assert.equal(project(snapshot).accounts.lowQuota, 2);
 });
 test('missing all data is unknown, while an empty snapshot reports an accurate zero count', () => {
     const snapshot = makeDashboardSnapshot(now); snapshot.accounts.forEach(account => { account.quota.last_updated -= 3600; account.disabled = false; });
     const result = project(snapshot);
     assert.equal(result.accounts.unknown, 5); assert.equal(result.windows['5h'].used, null);
     snapshot.accounts = []; snapshot.indexed_total = 0;
-    assert.deepEqual(project(snapshot).accounts, { total: 0, available: 0, unavailable: 0, unknown: 0 });
+    assert.deepEqual(project(snapshot).accounts, { total: 0, available: 0, lowQuota: 0, unavailable: 0, unknown: 0 });
 });
 test('ambiguous buckets and invalid future observations cannot report usable quota', () => {
     const snapshot = makeDashboardSnapshot(now); snapshot.accounts = [snapshot.accounts[0]]; snapshot.indexed_total = 1;
     snapshot.accounts[0].quota.groups[1].buckets[0].bucket_id = snapshot.accounts[0].quota.groups[0].buckets[0].bucket_id;
     assert.equal(project(snapshot).windows['5h'].used, null);
-    assert.deepEqual(project(snapshot).accounts, { total: 1, available: 1, unavailable: 0, unknown: 0 });
+    assert.deepEqual(project(snapshot).accounts, { total: 1, available: 1, lowQuota: 0, unavailable: 0, unknown: 0 });
     snapshot.accounts[0].quota.last_updated = now / 1000 + 301;
     assert.equal(project(snapshot).windows['5h'].used, null);
 });

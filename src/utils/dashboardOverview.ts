@@ -8,16 +8,17 @@ export function dashboardOverview(snapshot: DashboardSnapshot, preferences: Menu
     const families: QuotaFamily[] = preferences.quota_scope === 'all' ? ['gemini', 'other'] : [preferences.quota_scope];
     const threshold = Number.isFinite(reserve) && reserve >= 1 && reserve <= 99 ? reserve : 10;
     const views = snapshot.accounts.map(account => menuBarAccount(account, now, staleMinutes));
-    let available = 0, unavailable = 0;
+    let available = 0, lowQuota = 0, unavailable = 0;
     for (const view of views) {
         if (view.account.read_status !== 'loaded') continue;
+        if (!view.switchable) { unavailable++; continue; }
         const values = (['5h', 'weekly'] as const).flatMap(window => families.map(family => view.windows[window][family].remaining));
         const known = values.filter((value): value is number => value !== null);
-        if (!view.switchable || known.some(value => value <= threshold)) unavailable++;
+        if (known.some(value => value <= threshold)) lowQuota++;
         else if (known.length > 0) available++;
     }
     const total = snapshot.indexed_total;
-    const accounts = { total, available, unavailable, unknown: Math.max(0, total - available - unavailable) };
+    const accounts = { total, available, lowQuota, unavailable, unknown: Math.max(0, total - available - lowQuota - unavailable) };
     const visible = views.filter(view => !(preferences.hide_unavailable ?? DEFAULT_MENU_BAR_PREFERENCES.hide_unavailable) || view.switchable);
     const windows = Object.fromEntries((['5h', 'weekly'] as const).map(window => {
         const summary = aggregateMenuBar(visible, preferences.quota_scope, window, threshold);

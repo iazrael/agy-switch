@@ -165,13 +165,20 @@ pub fn open_menu_windows(snapshot: Option<&DashboardSnapshot>, ids: &[&str], pre
 
 pub fn aggregate(windows: &[[[Option<f64>; 2]; 2]], scope: MenuBarQuotaScope, period: usize, reserve: u8) -> (Option<f64>, usize, usize) {
     let families: &[usize] = match scope { MenuBarQuotaScope::All => &[0, 1], MenuBarQuotaScope::Gemini => &[0], MenuBarQuotaScope::Other => &[1] };
-    let covered: Vec<Vec<f64>> = windows.iter()
-        .map(|row| families.iter().filter_map(|&family| row[period][family]).collect::<Vec<_>>())
-        .filter(|vals| !vals.is_empty())
-        .collect();
-    let usable = covered.iter().filter(|vals| vals.iter().all(|&value| value > f64::from(reserve))).count();
-    let values: Vec<f64> = covered.iter().flat_map(|vals| vals.iter().copied()).collect();
-    ((!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64), usable, covered.len())
+    let mut usable = 0;
+    let mut covered = 0;
+    let mut values = Vec::new();
+    for row in windows {
+        let period_vals: Vec<f64> = families.iter().filter_map(|&family| row[period][family]).collect();
+        if period_vals.is_empty() { continue; }
+        covered += 1;
+        values.extend_from_slice(&period_vals);
+        let all_vals: Vec<f64> = (0..2).flat_map(|p| families.iter().filter_map(move |&family| row[p][family])).collect();
+        if all_vals.iter().all(|&value| value > f64::from(reserve)) {
+            usable += 1;
+        }
+    }
+    ((!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64), usable, covered)
 }
 
 pub fn percent(value: Option<f64>) -> String {
@@ -394,9 +401,12 @@ mod tests {
         let windows = [[[Some(100.0), Some(50.0)], [Some(0.0), Some(50.0)]], [[None, Some(50.0)], [Some(100.0), Some(100.0)]]];
         let (all_remaining, all_usable, all_covered) = aggregate(&windows, MenuBarQuotaScope::All, 0, 10);
         assert!((all_remaining.unwrap() - (200.0 / 3.0)).abs() < 1e-9);
-        assert_eq!((all_usable, all_covered), (2, 2));
+        assert_eq!((all_usable, all_covered), (1, 2));
         assert_eq!(aggregate(&windows, MenuBarQuotaScope::Gemini, 1, 10), (Some(50.0), 1, 2));
         assert_eq!(aggregate(&windows, MenuBarQuotaScope::Other, 0, 10), (Some(50.0), 2, 2));
+        let cross_exhausted = [[[Some(0.0), None], [Some(52.0), None]], [[Some(86.0), None], [Some(1.0), None]]];
+        assert_eq!(aggregate(&cross_exhausted, MenuBarQuotaScope::Gemini, 0, 10), (Some(43.0), 0, 2));
+        assert_eq!(aggregate(&cross_exhausted, MenuBarQuotaScope::Gemini, 1, 10), (Some(26.5), 0, 2));
         let gemini_only = [[[Some(31.0), None], [Some(60.0), None]]];
         assert_eq!(aggregate(&gemini_only, MenuBarQuotaScope::All, 0, 10), (Some(31.0), 1, 1));
         assert_eq!(aggregate(&gemini_only, MenuBarQuotaScope::All, 1, 10), (Some(60.0), 1, 1));

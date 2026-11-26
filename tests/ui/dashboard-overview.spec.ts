@@ -69,7 +69,7 @@ for (const language of ['zh', 'en']) test(`ten selectable cards remain readable 
     const quota = page.locator('[data-dashboard-card="aggregate_quota"]');
     const input = page.locator('[data-dashboard-card="average_input"]');
     await expect(status).toContainText(language === 'zh' ? '5 个账号' : '5 accounts');
-    await expect(status).toContainText(language === 'zh' ? '可用 2，不可用 2，未知 1' : 'Available 2, unavailable 2, unknown 1');
+    await expect(status).toContainText(language === 'zh' ? '可用 2，低额 1，不可用 1，未知 1' : 'Available 2, low 1, unavailable 1, unknown 1');
     await expect(quota.locator('[data-quota-window="5h"]')).toContainText('53%');
     await expect(quota.locator('[data-quota-window="weekly"]')).toContainText('67%');
     await expect(quota.getByRole('meter', { name: language === 'zh' ? '5 小时已用' : '5-hour used', exact: true })).toHaveAttribute('aria-valuetext', '53%');
@@ -224,7 +224,7 @@ test('read failure clears cached values, recovery reads locally, and no data is 
     });
     await expect(page.getByRole('button', { name: '刷新', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: '刷新', exact: true }).click();
-    await expect(status).toContainText('可用 0，不可用 0，未知 5');
+    await expect(status).toContainText('可用 0，低额 0，不可用 0，未知 5');
     await expect(quota.locator('[data-quota-window="5h"]')).toContainText('—');
     await expect(quota.getByRole('meter')).toHaveCount(0);
     await expect(quota.getByRole('img')).toHaveCount(2);
@@ -238,7 +238,7 @@ test('elapsed freshness expires displayed quota instead of retaining old values'
     await setup(page, newCards);
     await expect(page.locator('[data-dashboard-card="account_status"]')).toContainText('可用 2');
     await page.clock.fastForward(16 * 60_000);
-    await expect(page.locator('[data-dashboard-card="account_status"]')).toContainText('可用 0，不可用 1，未知 4');
+    await expect(page.locator('[data-dashboard-card="account_status"]')).toContainText('可用 0，低额 0，不可用 1，未知 4');
     await expect(page.locator('[data-dashboard-card="aggregate_quota"] [data-quota-window="5h"]')).toContainText('—');
 });
 

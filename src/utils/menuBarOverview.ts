@@ -92,14 +92,19 @@ export function aggregateCarbon(accounts: AccountQuotaView[]) {
  * headroom, never a token capacity estimate or a sum of independent allowances. */
 export function aggregateMenuBar(accounts: AccountQuotaView[], scope: MenuBarQuotaScope, window: QuotaWindow, threshold = 10) {
   const families: QuotaFamily[] = scope === 'all' ? ['gemini', 'other'] : [scope];
-  const covered = accounts
-    .map(view => families.map(family => view.windows[window][family].remaining).filter((value): value is number => value !== null))
-    .filter(values => values.length > 0);
-  const values = covered.flat();
   const cutoff = Number.isFinite(threshold) && threshold >= 1 && threshold <= 99 ? threshold : 10;
+  let usable = 0, covered = 0;
+  const values: number[] = [];
+  for (const view of accounts) {
+    const windowValues = families.map(family => view.windows[window][family].remaining).filter((value): value is number => value !== null);
+    if (!windowValues.length) continue;
+    covered++;
+    values.push(...windowValues);
+    const allValues = (['5h', 'weekly'] as const).flatMap(w => families.map(family => view.windows[w][family].remaining)).filter((value): value is number => value !== null);
+    if (allValues.every(value => value > cutoff)) usable++;
+  }
   return { remaining: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
-    usable: covered.filter(vals => vals.every(value => value > cutoff)).length,
-    covered: covered.length, total: accounts.length };
+    usable, covered, total: accounts.length };
 }
 
 export function quotaDisplay(value: number | null): string {
